@@ -1,9 +1,28 @@
-include!("app/cli.rs");
-include!("app/commands.rs");
-include!("app/resolve.rs");
-include!("app/run.rs");
-include!("app/metadata.rs");
-include!("app/config.rs");
-include!("app/hash.rs");
-include!("app/java.rs");
-include!("app/state.rs");
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod cli;
+mod commands;
+mod config;
+mod hash;
+mod java;
+mod metadata;
+mod resolve;
+mod run;
+mod state;
+
+use commands::*;
+use config::*;
+use hash::*;
+use java::*;
+use metadata::*;
+use resolve::*;
+use run::*;
+use state::*;
+
+pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
+    cli::run(args)
+}

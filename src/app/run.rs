@@ -1,4 +1,6 @@
-fn run_instance(
+use super::*;
+
+pub(super) fn run_instance(
     explicit_config: Option<PathBuf>,
     side: &str,
     selected: &str,
@@ -102,7 +104,7 @@ fn run_instance(
     ))
 }
 
-struct RunOptions {
+pub(super) struct RunOptions {
     locked: bool,
     java: Option<PathBuf>,
     timeout: Option<String>,
@@ -154,13 +156,13 @@ impl RunOptions {
     }
 }
 
-struct RunResult {
+pub(super) struct RunResult {
     success: bool,
     exit_code: Option<i32>,
     timed_out: bool,
 }
 
-fn launch_minecraft_instance(
+pub(super) fn launch_minecraft_instance(
     config: &Config,
     instance: &Instance,
     side: &str,
@@ -270,12 +272,12 @@ fn launch_minecraft_instance(
     })
 }
 
-struct RunArtifacts {
+pub(super) struct RunArtifacts {
     minecraft_log: Option<PathBuf>,
     crash_report: Option<PathBuf>,
 }
 
-fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<RunArtifacts, String> {
+pub(super) fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<RunArtifacts, String> {
     let minecraft_log = copy_if_exists(
         &game_dir.join("logs").join("latest.log"),
         &run_dir.join("minecraft-latest.log"),
@@ -290,7 +292,7 @@ fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<RunArtifacts
     })
 }
 
-fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, String> {
     if !source.is_file() {
         return Ok(None);
     }
@@ -300,7 +302,7 @@ fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, 
     Ok(Some(destination.to_path_buf()))
 }
 
-fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, String> {
     if !crash_dir.is_dir() {
         return Ok(None);
     }
@@ -320,7 +322,7 @@ fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, String> {
     Ok(newest)
 }
 
-fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf, String> {
+pub(super) fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf, String> {
     let file_name = source
         .file_name()
         .ok_or_else(|| format!("crash report has no filename: {}", source.display()))?;
@@ -330,14 +332,14 @@ fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
-struct TimedOutput {
+pub(super) struct TimedOutput {
     status: std::process::ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     timed_out: bool,
 }
 
-fn run_process_with_timeout(
+pub(super) fn run_process_with_timeout(
     command: &mut Command,
     timeout: Option<Duration>,
 ) -> Result<TimedOutput, String> {
@@ -394,7 +396,7 @@ fn run_process_with_timeout(
     }
 }
 
-fn parse_duration(value: &str) -> Result<Duration, String> {
+pub(super) fn parse_duration(value: &str) -> Result<Duration, String> {
     if let Some(ms) = value.strip_suffix("ms") {
         let millis = ms
             .parse()
@@ -412,7 +414,7 @@ fn parse_duration(value: &str) -> Result<Duration, String> {
     Err(format!("timeout `{value}` must use `ms` or `s`"))
 }
 
-fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {
+pub(super) fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {
     for entry in fs::read_dir(mods_dir)
         .map_err(|error| format!("failed to read {}: {error}", mods_dir.display()))?
     {
@@ -440,7 +442,7 @@ fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(
     Ok(())
 }
 
-fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
+pub(super) fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
     if let Some(path) = local_mod_path(root, source) {
         return path
             .canonicalize()
@@ -464,7 +466,7 @@ fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, Strin
     Ok(None)
 }
 
-fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
+pub(super) fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(None);
@@ -483,11 +485,11 @@ fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String>
     Ok(None)
 }
 
-fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
+pub(super) fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
     locked_value(root, key)
 }
 
-fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
+pub(super) fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(None);
@@ -498,7 +500,7 @@ fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
     Ok(block_string_value(&lock, key))
 }
 
-fn locked_main_class(root: &Path, side: &str) -> Result<Option<String>, String> {
+pub(super) fn locked_main_class(root: &Path, side: &str) -> Result<Option<String>, String> {
     let side_key = format!("{side}_main_class");
     if let Some(main_class) = locked_value(root, &side_key)? {
         return Ok(Some(main_class));
@@ -507,7 +509,7 @@ fn locked_main_class(root: &Path, side: &str) -> Result<Option<String>, String> 
     locked_value(root, "main_class")
 }
 
-fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(super) fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(Vec::new());
@@ -531,7 +533,7 @@ fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>,
     Ok(libraries)
 }
 
-fn join_classpath(paths: &[PathBuf]) -> String {
+pub(super) fn join_classpath(paths: &[PathBuf]) -> String {
     let separator = if cfg!(windows) { ";" } else { ":" };
     paths
         .iter()
@@ -540,13 +542,13 @@ fn join_classpath(paths: &[PathBuf]) -> String {
         .join(separator)
 }
 
-fn block_string_value(block: &str, key: &str) -> Option<String> {
+pub(super) fn block_string_value(block: &str, key: &str) -> Option<String> {
     block.lines()
         .map(str::trim)
         .find_map(|line| string_value(line, key))
 }
 
-fn run_id() -> String {
+pub(super) fn run_id() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
@@ -555,7 +557,7 @@ fn run_id() -> String {
     format!("{millis}")
 }
 
-fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
+pub(super) fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
     match explicit_config {
         Some(path) => Ok(path),
         None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?

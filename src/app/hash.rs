@@ -1,4 +1,4 @@
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let mut state = [
         0x6a09e667_u32,
         0xbb67ae85,
@@ -29,7 +29,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect::<String>()
 }
 
-fn sha256_compress(state: &mut [u32; 8], chunk: &[u8]) {
+pub(super) fn sha256_compress(state: &mut [u32; 8], chunk: &[u8]) {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
         0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -109,4 +109,3 @@ fn sha256_compress(state: &mut [u32; 8], chunk: &[u8]) {
     state[6] = state[6].wrapping_add(g);
     state[7] = state[7].wrapping_add(h);
 }
-

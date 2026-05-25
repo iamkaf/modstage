@@ -1,4 +1,6 @@
-fn resolve_instance(explicit_config: Option<PathBuf>, selected: Option<&str>) -> Result<(), String> {
+use super::*;
+
+pub(super) fn resolve_instance(explicit_config: Option<PathBuf>, selected: Option<&str>) -> Result<(), String> {
     let config_path = config_path(explicit_config)?;
     let contents = fs::read_to_string(&config_path)
         .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
@@ -196,7 +198,7 @@ sides = [{}]\n",
     Ok(())
 }
 
-fn resolved_maven_library(repositories: &[(String, String)], coordinate: &str) -> Result<Option<String>, String> {
+pub(super) fn resolved_maven_library(repositories: &[(String, String)], coordinate: &str) -> Result<Option<String>, String> {
     let Some(coordinates) = MavenCoordinates::parse_coordinate(coordinate) else {
         return Ok(None);
     };

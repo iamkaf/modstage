@@ -1,4 +1,6 @@
-fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
+use super::*;
+
+pub(super) fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
     let config_path = match explicit_config {
         Some(path) => path,
         None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?
@@ -21,7 +23,7 @@ fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn inspect_lock(explicit_config: Option<PathBuf>, instance: Option<&str>) -> Result<(), String> {
+pub(super) fn inspect_lock(explicit_config: Option<PathBuf>, instance: Option<&str>) -> Result<(), String> {
     let config_path = config_path(explicit_config)?;
     let root = config_path.parent().unwrap_or_else(|| Path::new("."));
     let lock_path = root.join("modstage.lock");
@@ -38,7 +40,7 @@ fn inspect_lock(explicit_config: Option<PathBuf>, instance: Option<&str>) -> Res
     Ok(())
 }
 
-fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), String> {
+pub(super) fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), String> {
     let config_path = config_path(explicit_config)?;
     let contents = fs::read_to_string(&config_path)
         .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
@@ -60,7 +62,103 @@ fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), Str
     Ok(())
 }
 
-fn clean_instance(
+pub(super) fn inspect_instance(
+    explicit_config: Option<PathBuf>,
+    instance_name: &str,
+    args: &[String],
+) -> Result<(), String> {
+    let config_path = config_path(explicit_config)?;
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let project_name = project_name(&contents)
+        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let dirs = StateDirs::for_project(&project_name, root)?;
+    let instance_dir = dirs
+        .data
+        .join("instances")
+        .join(&dirs.project_id)
+        .join(instance_name);
+
+    if let Some(side) = parse_side_arg(args)? {
+        validate_side(side)?;
+        print_instance_side(instance_name, side, &instance_dir.join(side))
+    } else {
+        print_instance_summary(instance_name, &instance_dir)
+    }
+}
+
+pub(super) fn print_instance_summary(instance_name: &str, instance_dir: &Path) -> Result<(), String> {
+    if !instance_dir.exists() {
+        return Err(format!(
+            "instance `{instance_name}` has no staged state at {}",
+            instance_dir.display()
+        ));
+    }
+
+    let mut sides = Vec::new();
+    for side in ["client", "server"] {
+        if instance_dir.join(side).join("game").is_dir() {
+            sides.push(side);
+        }
+    }
+
+    println!(r#"instance = "{instance_name}""#);
+    println!(r#"instance_dir = "{}""#, instance_dir.display());
+    println!(
+        "sides = [{}]",
+        sides
+            .iter()
+            .map(|side| format!(r#""{side}""#))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    Ok(())
+}
+
+pub(super) fn print_instance_side(instance_name: &str, side: &str, side_dir: &Path) -> Result<(), String> {
+    let game_dir = side_dir.join("game");
+    if !game_dir.is_dir() {
+        return Err(format!(
+            "instance `{instance_name}` has no staged {side} game directory at {}",
+            game_dir.display()
+        ));
+    }
+
+    let mods_dir = game_dir.join("mods");
+    let mut mods = Vec::new();
+    if mods_dir.is_dir() {
+        for entry in fs::read_dir(&mods_dir)
+            .map_err(|error| format!("failed to read {}: {error}", mods_dir.display()))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if entry.file_type().map_err(|error| error.to_string())?.is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                mods.push(name.to_string());
+            }
+        }
+    }
+    mods.sort();
+
+    println!(r#"instance = "{instance_name}""#);
+    println!(r#"side = "{side}""#);
+    println!(r#"game_dir = "{}""#, game_dir.display());
+    println!(r#"mods_dir = "{}""#, mods_dir.display());
+    println!("eula = {}", game_dir.join("eula.txt").is_file());
+    println!(
+        "mods = [{}]",
+        mods.iter()
+            .map(|name| format!(r#""{name}""#))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    Ok(())
+}
+
+pub(super) fn clean_instance(
     explicit_config: Option<PathBuf>,
     instance_name: &str,
     args: &[String],
@@ -92,7 +190,7 @@ fn clean_instance(
     Ok(())
 }
 
-fn parse_side_arg(args: &[String]) -> Result<Option<&str>, String> {
+pub(super) fn parse_side_arg(args: &[String]) -> Result<Option<&str>, String> {
     let mut side = None;
     let mut iter = args.iter();
 
@@ -111,7 +209,15 @@ fn parse_side_arg(args: &[String]) -> Result<Option<&str>, String> {
     Ok(side)
 }
 
-fn init_project() -> Result<(), String> {
+pub(super) fn validate_side(side: &str) -> Result<(), String> {
+    if side == "client" || side == "server" {
+        Ok(())
+    } else {
+        Err(format!("side must be client or server, got `{side}`"))
+    }
+}
+
+pub(super) fn init_project() -> Result<(), String> {
     let current_dir = env::current_dir().map_err(|error| error.to_string())?;
     let config_path = current_dir.join("modstage.toml");
 
@@ -141,4 +247,3 @@ sides = ["client", "server"]
 
     Ok(())
 }
-

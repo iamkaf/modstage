@@ -143,6 +143,38 @@ mods = [
         "inspect run should print the run report\n{inspect_stdout}"
     );
 
+    let inspect_instance = run_in_with_env(
+        &[
+            "inspect",
+            "instance",
+            "server-stage-26.1.2",
+            "--side",
+            "server",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        inspect_instance.status.success(),
+        "inspect instance should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&inspect_instance.stdout),
+        String::from_utf8_lossy(&inspect_instance.stderr)
+    );
+    let inspect_instance_stdout = String::from_utf8_lossy(&inspect_instance.stdout);
+    for expected in [
+        r#"instance = "server-stage-26.1.2""#,
+        r#"side = "server""#,
+        "game_dir = ",
+        "mods_dir = ",
+        "eula = true",
+        r#""example.jar""#,
+    ] {
+        assert!(
+            inspect_instance_stdout.contains(expected),
+            "inspect instance should contain {expected:?}\n{inspect_instance_stdout}"
+        );
+    }
+
     let clean = run_in_with_env(
         &["clean", "instance", "server-stage-26.1.2", "--side", "server"],
         &project,

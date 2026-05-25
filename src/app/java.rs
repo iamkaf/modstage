@@ -1,4 +1,6 @@
-fn java_list() -> Result<(), String> {
+use super::*;
+
+pub(super) fn java_list() -> Result<(), String> {
     let runtimes = discover_java_runtimes();
 
     if runtimes.is_empty() {
@@ -13,7 +15,7 @@ fn java_list() -> Result<(), String> {
     Ok(())
 }
 
-fn java_doctor(args: &[String]) -> Result<(), String> {
+pub(super) fn java_doctor(args: &[String]) -> Result<(), String> {
     let java = parse_java_arg(args)?.unwrap_or_else(|| PathBuf::from(java_bin()));
     let info = inspect_java(&java)?;
 
@@ -22,7 +24,7 @@ fn java_doctor(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn java_install(major: &str) -> Result<(), String> {
+pub(super) fn java_install(major: &str) -> Result<(), String> {
     let major: u32 = major
         .parse()
         .map_err(|error| format!("invalid Java major version `{major}`: {error}"))?;
@@ -46,7 +48,7 @@ fn java_install(major: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn azul_metadata_url(major: u32) -> Result<String, String> {
+pub(super) fn azul_metadata_url(major: u32) -> Result<String, String> {
     if let Ok(url) = env::var("MODSTAGE_AZUL_METADATA_URL") {
         return Ok(url);
     }
@@ -58,7 +60,7 @@ fn azul_metadata_url(major: u32) -> Result<String, String> {
     ))
 }
 
-fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
+pub(super) fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
     let mut java = None;
     let mut iter = args.iter();
 
@@ -76,7 +78,7 @@ fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
     Ok(java)
 }
 
-fn discover_java_runtimes() -> Vec<PathBuf> {
+pub(super) fn discover_java_runtimes() -> Vec<PathBuf> {
     let Some(path) = env::var_os("PATH") else {
         return Vec::new();
     };
@@ -92,7 +94,7 @@ fn discover_java_runtimes() -> Vec<PathBuf> {
     runtimes
 }
 
-fn inspect_java(java: &Path) -> Result<JavaInfo, String> {
+pub(super) fn inspect_java(java: &Path) -> Result<JavaInfo, String> {
     let output = Command::new(java)
         .args(["-XshowSettings:properties", "-version"])
         .output()
@@ -124,7 +126,7 @@ fn inspect_java(java: &Path) -> Result<JavaInfo, String> {
     })
 }
 
-fn property(text: &str, key: &str) -> Option<String> {
+pub(super) fn property(text: &str, key: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
         let Some((name, value)) = line.split_once('=') else {
@@ -139,7 +141,7 @@ fn property(text: &str, key: &str) -> Option<String> {
     None
 }
 
-fn java_major(version: &str) -> Result<u32, String> {
+pub(super) fn java_major(version: &str) -> Result<u32, String> {
     let mut parts = version.split('.');
     let first = parts
         .next()
@@ -160,20 +162,20 @@ fn java_major(version: &str) -> Result<u32, String> {
         .map_err(|error| format!("invalid Java version `{version}`: {error}"))
 }
 
-fn print_java_info(java: &Path, info: &JavaInfo) {
+pub(super) fn print_java_info(java: &Path, info: &JavaInfo) {
     println!("java: {}", java.display());
     println!("version: {}", info.version);
     println!("major: {}", info.major);
     println!("arch: {}", info.arch);
 }
 
-struct JavaInfo {
+pub(super) struct JavaInfo {
     version: String,
     major: u32,
     arch: String,
 }
 
-fn java_bin() -> &'static str {
+pub(super) fn java_bin() -> &'static str {
     if cfg!(target_os = "windows") {
         "java.exe"
     } else {

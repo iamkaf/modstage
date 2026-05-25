@@ -1,63 +1,65 @@
-struct MinecraftMetadata {
-    manifest_url: String,
-    manifest_sha256: String,
-    version_url: String,
-    version_sha256: String,
-    java_major: u32,
-    main_class: Option<String>,
-    client_url: String,
-    client_sha256: String,
-    server_url: String,
-    server_sha256: String,
-    libraries: Vec<MinecraftLibrary>,
-    assets: Option<MinecraftAssets>,
+use super::*;
+
+pub(super) struct MinecraftMetadata {
+    pub(super) manifest_url: String,
+    pub(super) manifest_sha256: String,
+    pub(super) version_url: String,
+    pub(super) version_sha256: String,
+    pub(super) java_major: u32,
+    pub(super) main_class: Option<String>,
+    pub(super) client_url: String,
+    pub(super) client_sha256: String,
+    pub(super) server_url: String,
+    pub(super) server_sha256: String,
+    pub(super) libraries: Vec<MinecraftLibrary>,
+    pub(super) assets: Option<MinecraftAssets>,
 }
 
-struct MinecraftLibrary {
-    name: String,
-    path: String,
-    url: String,
-    sha256: String,
+pub(super) struct MinecraftLibrary {
+    pub(super) name: String,
+    pub(super) path: String,
+    pub(super) url: String,
+    pub(super) sha256: String,
 }
 
-struct MinecraftAssets {
-    id: String,
-    index_url: String,
-    index_sha256: String,
-    objects: Vec<MinecraftAsset>,
+pub(super) struct MinecraftAssets {
+    pub(super) id: String,
+    pub(super) index_url: String,
+    pub(super) index_sha256: String,
+    pub(super) objects: Vec<MinecraftAsset>,
 }
 
-struct MinecraftAsset {
-    name: String,
-    hash: String,
-    size: u32,
-    url: String,
-    sha256: String,
+pub(super) struct MinecraftAsset {
+    pub(super) name: String,
+    pub(super) hash: String,
+    pub(super) size: u32,
+    pub(super) url: String,
+    pub(super) sha256: String,
 }
 
-struct LoaderMetadata {
-    kind: String,
-    version: String,
-    loader_maven: Option<String>,
-    intermediary_maven: Option<String>,
-    installer_maven: Option<String>,
-    client_main_class: String,
-    server_main_class: String,
+pub(super) struct LoaderMetadata {
+    pub(super) kind: String,
+    pub(super) version: String,
+    pub(super) loader_maven: Option<String>,
+    pub(super) intermediary_maven: Option<String>,
+    pub(super) installer_maven: Option<String>,
+    pub(super) client_main_class: String,
+    pub(super) server_main_class: String,
 }
 
-struct ModrinthMod {
-    project: String,
-    version_id: String,
-    version_number: String,
-    filename: String,
-    url: String,
-    path: PathBuf,
-    sha1: String,
-    sha512: String,
-    sha256: String,
+pub(super) struct ModrinthMod {
+    pub(super) project: String,
+    pub(super) version_id: String,
+    pub(super) version_number: String,
+    pub(super) filename: String,
+    pub(super) url: String,
+    pub(super) path: PathBuf,
+    pub(super) sha1: String,
+    pub(super) sha512: String,
+    pub(super) sha256: String,
 }
 
-fn resolve_modrinth_mod(
+pub(super) fn resolve_modrinth_mod(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -98,18 +100,18 @@ fn resolve_modrinth_mod(
     })
 }
 
-fn primary_modrinth_file(metadata: &str) -> Option<&str> {
+pub(super) fn primary_modrinth_file(metadata: &str) -> Option<&str> {
     let primary = metadata.find("\"primary\"")?;
     let file_start = metadata[..primary].rfind('{')?;
     Some(&metadata[file_start..])
 }
 
-fn modrinth_project(source: &str) -> Option<&str> {
+pub(super) fn modrinth_project(source: &str) -> Option<&str> {
     source.strip_prefix("modrinth:")
         .filter(|project| !project.is_empty())
 }
 
-fn modrinth_versions_url(project: &str, instance: &Instance) -> String {
+pub(super) fn modrinth_versions_url(project: &str, instance: &Instance) -> String {
     if let Ok(url) = env::var("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL") {
         return url;
     }
@@ -120,7 +122,7 @@ fn modrinth_versions_url(project: &str, instance: &Instance) -> String {
     )
 }
 
-fn resolve_loader_metadata(
+pub(super) fn resolve_loader_metadata(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -133,7 +135,7 @@ fn resolve_loader_metadata(
     }
 }
 
-fn resolve_fabric_loader_metadata(
+pub(super) fn resolve_fabric_loader_metadata(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -163,7 +165,7 @@ fn resolve_fabric_loader_metadata(
     }))
 }
 
-fn resolve_neoforge_loader_metadata(
+pub(super) fn resolve_neoforge_loader_metadata(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -171,7 +173,7 @@ fn resolve_neoforge_loader_metadata(
     resolve_installer_loader_metadata(config, instance, root, "neoforge")
 }
 
-fn resolve_installer_loader_metadata(
+pub(super) fn resolve_installer_loader_metadata(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -199,7 +201,7 @@ fn resolve_installer_loader_metadata(
     }))
 }
 
-fn loader_metadata_text(
+pub(super) fn loader_metadata_text(
     config: &Config,
     root: &Path,
     loader: &str,
@@ -213,11 +215,11 @@ fn loader_metadata_text(
         .map_err(|error| format!("failed to read {}: {error}", path.display()))
 }
 
-fn fabric_meta_url() -> Option<String> {
+pub(super) fn fabric_meta_url() -> Option<String> {
     env::var("MODSTAGE_FABRIC_META_URL").ok()
 }
 
-fn installer_loader_meta_url(loader: &str) -> Option<String> {
+pub(super) fn installer_loader_meta_url(loader: &str) -> Option<String> {
     match loader {
         "forge" => env::var("MODSTAGE_FORGE_META_URL").ok(),
         "neoforge" => env::var("MODSTAGE_NEOFORGE_META_URL").ok(),
@@ -225,7 +227,7 @@ fn installer_loader_meta_url(loader: &str) -> Option<String> {
     }
 }
 
-fn resolve_minecraft_metadata(
+pub(super) fn resolve_minecraft_metadata(
     config: &Config,
     instance: &Instance,
     root: &Path,
@@ -275,7 +277,7 @@ fn resolve_minecraft_metadata(
     }))
 }
 
-fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> Result<Option<MinecraftAssets>, String> {
+pub(super) fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> Result<Option<MinecraftAssets>, String> {
     let Some(asset_index) = json_object_after(version_text, "assetIndex") else {
         return Ok(None);
     };
@@ -324,7 +326,7 @@ fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> Result<Opti
     }))
 }
 
-fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {
+pub(super) fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {
     let Some(objects_start) = index_text.find("\"objects\"") else {
         return Vec::new();
     };
@@ -350,13 +352,13 @@ fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {
     blocks
 }
 
-fn asset_name(block: &str) -> Option<String> {
+pub(super) fn asset_name(block: &str) -> Option<String> {
     let first = block.strip_prefix('"')?;
     let end = first.find('"')?;
     Some(first[..end].to_string())
 }
 
-fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<Vec<MinecraftLibrary>, String> {
+pub(super) fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<Vec<MinecraftLibrary>, String> {
     let mut libraries = Vec::new();
 
     for block in minecraft_library_blocks(version_text) {
@@ -392,7 +394,7 @@ fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<V
     Ok(libraries)
 }
 
-fn minecraft_library_blocks(version_text: &str) -> Vec<&str> {
+pub(super) fn minecraft_library_blocks(version_text: &str) -> Vec<&str> {
     let Some(libraries_start) = version_text.find("\"libraries\"") else {
         return Vec::new();
     };
@@ -412,16 +414,16 @@ fn minecraft_library_blocks(version_text: &str) -> Vec<&str> {
     blocks
 }
 
-fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&'a str> {
+pub(super) fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&'a str> {
     let object_start = text.find(&format!("\"{object_key}\""))?;
     Some(&text[object_start..])
 }
 
-fn mojang_manifest_url() -> Option<String> {
+pub(super) fn mojang_manifest_url() -> Option<String> {
     env::var("MODSTAGE_MOJANG_MANIFEST_URL").ok()
 }
 
-fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBuf, String> {
+pub(super) fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(cache_dir)
         .map_err(|error| format!("failed to create {}: {error}", cache_dir.display()))?;
     let destination = cache_dir.join(file_name);
@@ -450,7 +452,7 @@ fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBu
     Err(format!("unsupported URL `{url}`"))
 }
 
-fn manifest_version_url(manifest: &str, version: &str) -> Option<String> {
+pub(super) fn manifest_version_url(manifest: &str, version: &str) -> Option<String> {
     let id_key = manifest.find(&format!("\"{version}\""))?;
     let before_id = &manifest[..id_key];
     let id_field = before_id.rfind("\"id\"")?;
@@ -458,7 +460,7 @@ fn manifest_version_url(manifest: &str, version: &str) -> Option<String> {
     json_string(after_version, "url")
 }
 
-fn json_string(text: &str, key: &str) -> Option<String> {
+pub(super) fn json_string(text: &str, key: &str) -> Option<String> {
     let key_start = text.find(&format!("\"{key}\""))?;
     let after_key = &text[key_start + key.len() + 2..];
     let colon = after_key.find(':')?;
@@ -468,12 +470,12 @@ fn json_string(text: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-fn json_object_string(text: &str, object_key: &str, value_key: &str) -> Option<String> {
+pub(super) fn json_object_string(text: &str, object_key: &str, value_key: &str) -> Option<String> {
     let object_start = text.find(&format!("\"{object_key}\""))?;
     json_string(&text[object_start..], value_key)
 }
 
-fn json_u32(text: &str, key: &str) -> Option<u32> {
+pub(super) fn json_u32(text: &str, key: &str) -> Option<u32> {
     let key_start = text.find(&format!("\"{key}\""))?;
     let after_key = &text[key_start + key.len() + 2..];
     let colon = after_key.find(':')?;

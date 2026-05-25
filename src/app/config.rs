@@ -1,20 +1,22 @@
-struct Config {
-    project_name: String,
-    repositories: Vec<(String, String)>,
-    instances: Vec<Instance>,
+use super::*;
+
+pub(super) struct Config {
+    pub(super) project_name: String,
+    pub(super) repositories: Vec<(String, String)>,
+    pub(super) instances: Vec<Instance>,
 }
 
-struct Instance {
-    name: String,
-    minecraft: String,
-    loader: String,
-    loader_version: Option<String>,
-    sides: Vec<String>,
-    mods: Vec<String>,
+pub(super) struct Instance {
+    pub(super) name: String,
+    pub(super) minecraft: String,
+    pub(super) loader: String,
+    pub(super) loader_version: Option<String>,
+    pub(super) sides: Vec<String>,
+    pub(super) mods: Vec<String>,
 }
 
 impl Config {
-    fn parse(contents: &str) -> Result<Self, String> {
+    pub(super) fn parse(contents: &str) -> Result<Self, String> {
         let project_name = project_name(contents).ok_or_else(|| {
             "modstage.toml must contain [project] with a name".to_string()
         })?;
@@ -124,7 +126,7 @@ impl Config {
     }
 }
 
-fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
     let mut current = start
         .canonicalize()
         .map_err(|error| format!("failed to resolve {}: {error}", start.display()))?;
@@ -141,7 +143,7 @@ fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
     }
 }
 
-fn project_name(contents: &str) -> Option<String> {
+pub(super) fn project_name(contents: &str) -> Option<String> {
     let mut in_project = false;
 
     for line in contents.lines() {
@@ -166,18 +168,18 @@ fn project_name(contents: &str) -> Option<String> {
     None
 }
 
-fn string_value(line: &str, key: &str) -> Option<String> {
+pub(super) fn string_value(line: &str, key: &str) -> Option<String> {
     let value = line.strip_prefix(key)?.trim_start();
     let value = value.strip_prefix('=')?.trim();
     Some(value.trim_matches('"').to_string())
 }
 
-fn key_value(line: &str) -> Option<(String, String)> {
+pub(super) fn key_value(line: &str) -> Option<(String, String)> {
     let (key, value) = line.split_once('=')?;
     Some((key.trim().to_string(), value.trim().trim_matches('"').to_string()))
 }
 
-fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
+pub(super) fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
     let value = line.strip_prefix(key)?.trim_start();
     let value = value.strip_prefix('=')?.trim();
     let value = value.strip_prefix('[')?.strip_suffix(']')?;
@@ -190,7 +192,7 @@ fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
     )
 }
 
-fn local_mod_path(root: &Path, source: &str) -> Option<PathBuf> {
+pub(super) fn local_mod_path(root: &Path, source: &str) -> Option<PathBuf> {
     if source.starts_with("maven:") || source.starts_with("modrinth:") {
         return None;
     }
@@ -203,19 +205,19 @@ fn local_mod_path(root: &Path, source: &str) -> Option<PathBuf> {
     })
 }
 
-struct MavenCoordinates<'a> {
-    group: &'a str,
-    artifact: &'a str,
-    version: &'a str,
+pub(super) struct MavenCoordinates<'a> {
+    pub(super) group: &'a str,
+    pub(super) artifact: &'a str,
+    pub(super) version: &'a str,
 }
 
 impl<'a> MavenCoordinates<'a> {
-    fn parse(source: &'a str) -> Option<Self> {
+    pub(super) fn parse(source: &'a str) -> Option<Self> {
         let source = source.strip_prefix("maven:")?;
         Self::parse_coordinate(source)
     }
 
-    fn parse_coordinate(source: &'a str) -> Option<Self> {
+    pub(super) fn parse_coordinate(source: &'a str) -> Option<Self> {
         let mut parts = source.split(':');
         let group = parts.next()?;
         let artifact = parts.next()?;
@@ -233,7 +235,7 @@ impl<'a> MavenCoordinates<'a> {
     }
 }
 
-fn maven_artifact(
+pub(super) fn maven_artifact(
     repositories: &[(String, String)],
     coordinates: &MavenCoordinates<'_>,
 ) -> Option<(String, PathBuf)> {
@@ -252,11 +254,11 @@ fn maven_artifact(
     maven_local_artifact(coordinates).map(|path| ("mavenLocal".to_string(), path))
 }
 
-fn maven_local_artifact(coordinates: &MavenCoordinates<'_>) -> Option<PathBuf> {
+pub(super) fn maven_local_artifact(coordinates: &MavenCoordinates<'_>) -> Option<PathBuf> {
     maven_artifact_under(maven_local_root()?, coordinates)
 }
 
-fn maven_artifact_under(
+pub(super) fn maven_artifact_under(
     mut path: PathBuf,
     coordinates: &MavenCoordinates<'_>,
 ) -> Option<PathBuf> {
@@ -275,7 +277,7 @@ fn maven_artifact_under(
     path.is_file().then_some(path)
 }
 
-fn maven_local_root() -> Option<PathBuf> {
+pub(super) fn maven_local_root() -> Option<PathBuf> {
     if let Some(path) = env::var_os("MODSTAGE_MAVEN_LOCAL") {
         return Some(PathBuf::from(path));
     }

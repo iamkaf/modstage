@@ -1,11 +1,13 @@
-struct StateDirs {
-    project_id: String,
-    data: PathBuf,
-    cache: PathBuf,
+use super::*;
+
+pub(super) struct StateDirs {
+    pub(super) project_id: String,
+    pub(super) data: PathBuf,
+    pub(super) cache: PathBuf,
 }
 
 impl StateDirs {
-    fn for_project(project_name: &str, root: &Path) -> Result<Self, String> {
+    pub(super) fn for_project(project_name: &str, root: &Path) -> Result<Self, String> {
         let project_id = format!("{}-{:08x}", project_name, stable_hash(&root.display().to_string()));
         let data = data_home()?.join("modstage");
         let cache = cache_home()?.join("modstage");
@@ -19,7 +21,7 @@ impl StateDirs {
 }
 
 #[cfg(target_os = "linux")]
-fn data_home() -> Result<PathBuf, String> {
+pub(super) fn data_home() -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("XDG_DATA_HOME") {
         return Ok(PathBuf::from(path));
     }
@@ -28,7 +30,7 @@ fn data_home() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn cache_home() -> Result<PathBuf, String> {
+pub(super) fn cache_home() -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         return Ok(PathBuf::from(path));
     }
@@ -37,36 +39,36 @@ fn cache_home() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn data_home() -> Result<PathBuf, String> {
+pub(super) fn data_home() -> Result<PathBuf, String> {
     Ok(home_dir()?.join("Library").join("Application Support"))
 }
 
 #[cfg(target_os = "macos")]
-fn cache_home() -> Result<PathBuf, String> {
+pub(super) fn cache_home() -> Result<PathBuf, String> {
     Ok(home_dir()?.join("Library").join("Caches"))
 }
 
 #[cfg(target_os = "windows")]
-fn data_home() -> Result<PathBuf, String> {
+pub(super) fn data_home() -> Result<PathBuf, String> {
     env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| "APPDATA is not set".to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn cache_home() -> Result<PathBuf, String> {
+pub(super) fn cache_home() -> Result<PathBuf, String> {
     env::var_os("LOCALAPPDATA")
         .map(|path| PathBuf::from(path).join("Cache"))
         .ok_or_else(|| "LOCALAPPDATA is not set".to_string())
 }
 
-fn home_dir() -> Result<PathBuf, String> {
+pub(super) fn home_dir() -> Result<PathBuf, String> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is not set".to_string())
 }
 
-fn stable_hash(value: &str) -> u32 {
+pub(super) fn stable_hash(value: &str) -> u32 {
     let mut hash = 0x811c9dc5_u32;
 
     for byte in value.as_bytes() {

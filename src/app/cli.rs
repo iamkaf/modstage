@@ -1,10 +1,6 @@
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use super::*;
 
-const ROOT_HELP: &str = "\
+pub(super) const ROOT_HELP: &str = "\
 modstage
 
 Usage:
@@ -60,6 +56,11 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
         [command, subject, run_id] if command == "inspect" && subject == "run" => {
             inspect_run(invocation.config, run_id)
         }
+        [command, subject, instance, rest @ ..]
+            if command == "inspect" && subject == "instance" =>
+        {
+            inspect_instance(invocation.config, instance, rest)
+        }
         [command, ..] if command == "inspect" => {
             println!("inspect is not implemented yet");
             Ok(())
@@ -85,7 +86,7 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
     }
 }
 
-struct Invocation {
+pub(super) struct Invocation {
     config: Option<PathBuf>,
     args: Vec<String>,
 }
@@ -116,15 +117,15 @@ impl Invocation {
     }
 }
 
-fn is_help(args: &[String]) -> bool {
+pub(super) fn is_help(args: &[String]) -> bool {
     matches!(args, [arg] if is_help_arg(arg))
 }
 
-fn is_help_arg(arg: &str) -> bool {
+pub(super) fn is_help_arg(arg: &str) -> bool {
     arg == "--help" || arg == "-h"
 }
 
-fn help_for(command: &str, rest: &[String]) -> Result<&'static str, String> {
+pub(super) fn help_for(command: &str, rest: &[String]) -> Result<&'static str, String> {
     let help = match (command, rest) {
         ("init", _) => "Usage:\n  modstage init\n",
         ("resolve", _) => "Usage:\n  modstage resolve [instance]\n",
