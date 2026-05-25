@@ -40,10 +40,34 @@ pub(super) fn java_install(major: &str) -> Result<(), String> {
     let archive_path = fetch_to_cache(&download_url, &cache_dir, &archive_name)?;
     let archive = fs::read(&archive_path)
         .map_err(|error| format!("failed to read {}: {error}", archive_path.display()))?;
+    let sha256 = sha256_hex(&archive);
+    let install_dir = data_home()?.join("modstage").join("java").join(major.to_string());
+    fs::create_dir_all(&install_dir)
+        .map_err(|error| format!("failed to create {}: {error}", install_dir.display()))?;
+    let managed_archive = install_dir.join(&archive_name);
+    fs::copy(&archive_path, &managed_archive).map_err(|error| {
+        format!(
+            "failed to copy Java archive to {}: {error}",
+            managed_archive.display()
+        )
+    })?;
+    fs::write(
+        install_dir.join("runtime.toml"),
+        format!(
+            "major = {major}\nmetadata_url = \"{}\"\ndownload_url = \"{}\"\narchive_name = \"{}\"\narchive = \"{}\"\nsha256 = \"{}\"\n",
+            toml_escape(&metadata_url),
+            toml_escape(&download_url),
+            toml_escape(&archive_name),
+            toml_escape(&managed_archive.display().to_string()),
+            sha256
+        ),
+    )
+    .map_err(|error| format!("failed to write managed Java record: {error}"))?;
 
     println!("java major: {major}");
     println!("java archive: {}", archive_path.display());
-    println!("sha256: {}", sha256_hex(&archive));
+    println!("managed java: {}", install_dir.display());
+    println!("sha256: {sha256}");
 
     Ok(())
 }

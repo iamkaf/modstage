@@ -93,7 +93,7 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 #[test]
-fn java_install_caches_a_managed_runtime_archive() {
+fn java_install_records_a_managed_runtime_in_durable_state() {
     let temp = temp_dir("java-install");
     let data_home = temp.join("data");
     let cache_home = temp.join("cache");
@@ -120,7 +120,7 @@ fn java_install_caches_a_managed_runtime_archive() {
 
     assert!(
         output.status.success(),
-        "java install should cache the runtime archive\nstdout:\n{}\nstderr:\n{}",
+        "java install should record the managed runtime\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -131,11 +131,40 @@ fn java_install_caches_a_managed_runtime_archive() {
         .join("downloads")
         .join("java")
         .join("zulu-test-jre.zip");
+    let managed = data_home
+        .join("modstage")
+        .join("java")
+        .join("25")
+        .join("zulu-test-jre.zip");
+    let record = data_home
+        .join("modstage")
+        .join("java")
+        .join("25")
+        .join("runtime.toml");
     assert!(
         cached.is_file()
+            && managed.is_file()
+            && record.is_file()
             && stdout.contains("java archive:")
+            && stdout.contains("managed java:")
             && stdout.contains("sha256: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-        "java install should report cached archive and hash\n{stdout}"
+        "java install should report durable managed runtime state\n{stdout}"
+    );
+    let record = fs::read_to_string(record).expect("runtime.toml should be readable");
+    for expected in [
+        r#"major = 25"#,
+        r#"archive_name = "zulu-test-jre.zip""#,
+        r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+    ] {
+        assert!(
+            record.contains(expected),
+            "runtime record should contain {expected:?}\n{record}"
+        );
+    }
+    assert_eq!(
+        fs::read(&managed).expect("managed archive should be readable"),
+        b"abc",
+        "managed Java archive should be durable outside the redownloadable cache"
     );
 
     fs::remove_dir_all(temp).expect("failed to remove temp dir");
