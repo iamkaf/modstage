@@ -12,6 +12,11 @@ mod java;
 mod metadata;
 mod resolve;
 mod run;
+mod run_launch;
+mod run_lock;
+mod run_process;
+mod run_report;
+mod run_staging;
 mod state;
 
 use commands::*;
@@ -21,6 +26,11 @@ use java::*;
 use metadata::*;
 use resolve::*;
 use run::*;
+use run_launch::*;
+use run_lock::*;
+use run_process::*;
+use run_report::*;
+use run_staging::*;
 use state::*;
 
 pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
