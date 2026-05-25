@@ -75,3 +75,61 @@ fn resolve_writes_a_toml_lockfile_for_a_named_instance() {
 
     fs::remove_dir_all(project).expect("failed to remove temp project");
 }
+
+#[test]
+fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
+    let project = temp_project("resolve-mods");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-mods"
+
+[repositories]
+kaf = "https://maven.kaf.dev/releases"
+fabric = "https://maven.fabricmc.net"
+
+[[instance]]
+name = "liteminer-fabric-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+mods = [
+  "modrinth:fabric-api",
+  "maven:dev.kaf:teakit-fabric:0.1.0",
+  "maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in(&["resolve", "liteminer-fabric-26.1.2"], &project);
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+
+    for expected in [
+        r#"project = "resolve-mods""#,
+        r#"instance = "liteminer-fabric-26.1.2""#,
+        r#"loader = "fabric""#,
+        r#"loader_version = "latest""#,
+        r#"kaf = "https://maven.kaf.dev/releases""#,
+        r#"fabric = "https://maven.fabricmc.net""#,
+        r#""modrinth:fabric-api""#,
+        r#""maven:dev.kaf:teakit-fabric:0.1.0""#,
+        r#""maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}

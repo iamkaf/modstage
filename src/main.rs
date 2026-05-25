@@ -238,15 +238,29 @@ fn resolve_instance(explicit_config: Option<PathBuf>, selected: Option<&str>) ->
 version = 1\n\
 project = \"{}\"\n\
 \n\
+[repositories]\n\
+{}\
+\n\
 [[instance]]\n\
 instance = \"{}\"\n\
 minecraft = \"{}\"\n\
 loader = \"{}\"\n\
+{}\
 sides = [{}]\n",
         config.project_name,
+        config
+            .repositories
+            .iter()
+            .map(|(name, url)| format!("{name} = \"{url}\"\n"))
+            .collect::<String>(),
         instance.name,
         instance.minecraft,
         instance.loader,
+        instance
+            .loader_version
+            .as_ref()
+            .map(|version| format!("loader_version = \"{version}\"\n"))
+            .unwrap_or_default(),
         instance
             .sides
             .iter()
@@ -254,6 +268,19 @@ sides = [{}]\n",
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let lock = if instance.mods.is_empty() {
+        lock
+    } else {
+        format!(
+            "{lock}mods = [{}]\n",
+            instance
+                .mods
+                .iter()
+                .map(|item| format!("\"{item}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
 
     fs::write(&lock_path, lock)
         .map_err(|error| format!("failed to write {}: {error}", lock_path.display()))?;
@@ -272,6 +299,7 @@ fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
 
 struct Config {
     project_name: String,
+    repositories: Vec<(String, String)>,
     instances: Vec<Instance>,
 }
 
@@ -279,7 +307,9 @@ struct Instance {
     name: String,
     minecraft: String,
     loader: String,
+    loader_version: Option<String>,
     sides: Vec<String>,
+    mods: Vec<String>,
 }
 
 impl Config {
@@ -287,23 +317,61 @@ impl Config {
         let project_name = project_name(contents).ok_or_else(|| {
             "modstage.toml must contain [project] with a name".to_string()
         })?;
+        let mut section = "";
+        let mut repositories = Vec::new();
         let mut instances = Vec::new();
-        let mut current = None;
+        let mut current: Option<Instance> = None;
+        let mut multiline_array: Option<(String, Vec<String>)> = None;
 
         for line in contents.lines() {
             let line = line.trim();
+
+            if let Some((key, values)) = multiline_array.as_mut() {
+                if line == "]" {
+                    if key == "mods"
+                        && let Some(instance) = current.as_mut()
+                    {
+                        instance.mods = values.clone();
+                    }
+                    multiline_array = None;
+                    continue;
+                }
+
+                values.push(line.trim_end_matches(',').trim_matches('"').to_string());
+                continue;
+            }
+
+            if line == "[repositories]" {
+                section = "repositories";
+                continue;
+            }
 
             if line == "[[instance]]" {
                 if let Some(instance) = current.take() {
                     instances.push(instance);
                 }
 
+                section = "instance";
                 current = Some(Instance {
                     name: String::new(),
                     minecraft: String::new(),
                     loader: String::new(),
+                    loader_version: None,
                     sides: Vec::new(),
+                    mods: Vec::new(),
                 });
+                continue;
+            }
+
+            if line.starts_with('[') {
+                section = "";
+                continue;
+            }
+
+            if section == "repositories" {
+                if let Some((name, url)) = key_value(line) {
+                    repositories.push((name, url));
+                }
                 continue;
             }
 
@@ -317,8 +385,14 @@ impl Config {
                 instance.minecraft = value;
             } else if let Some(value) = string_value(line, "loader") {
                 instance.loader = value;
+            } else if let Some(value) = string_value(line, "loader_version") {
+                instance.loader_version = Some(value);
             } else if let Some(value) = string_array_value(line, "sides") {
                 instance.sides = value;
+            } else if let Some(value) = string_array_value(line, "mods") {
+                instance.mods = value;
+            } else if line == "mods = [" {
+                multiline_array = Some(("mods".to_string(), Vec::new()));
             }
         }
 
@@ -343,6 +417,7 @@ impl Config {
 
         Ok(Self {
             project_name,
+            repositories,
             instances,
         })
     }
@@ -394,6 +469,11 @@ fn string_value(line: &str, key: &str) -> Option<String> {
     let value = line.strip_prefix(key)?.trim_start();
     let value = value.strip_prefix('=')?.trim();
     Some(value.trim_matches('"').to_string())
+}
+
+fn key_value(line: &str) -> Option<(String, String)> {
+    let (key, value) = line.split_once('=')?;
+    Some((key.trim().to_string(), value.trim().trim_matches('"').to_string()))
 }
 
 fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
