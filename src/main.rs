@@ -415,6 +415,21 @@ sides = [{}]\n",
                 path.display(),
                 sha256_hex(&bytes)
             ));
+        } else if let Some(project) = modrinth_project(source) {
+            let resolved = resolve_modrinth_mod(&config, instance, config_root, project)?;
+            lock.push_str(&format!(
+                "\n[[mod]]\nsource = \"{}\"\nprovider = \"modrinth\"\nproject = \"{}\"\nversion_id = \"{}\"\nversion_number = \"{}\"\nfilename = \"{}\"\nurl = \"{}\"\npath = \"{}\"\nsha1 = \"{}\"\nsha512 = \"{}\"\nsha256 = \"{}\"\n",
+                source,
+                resolved.project,
+                resolved.version_id,
+                resolved.version_number,
+                resolved.filename,
+                resolved.url,
+                resolved.path.display(),
+                resolved.sha1,
+                resolved.sha512,
+                resolved.sha256
+            ));
         } else if let Some(coordinates) = MavenCoordinates::parse(source) {
             let Some((repository, path)) = maven_artifact(&config.repositories, &coordinates) else {
                 continue;
@@ -592,6 +607,81 @@ struct LoaderMetadata {
     installer_maven: Option<String>,
     client_main_class: String,
     server_main_class: String,
+}
+
+struct ModrinthMod {
+    project: String,
+    version_id: String,
+    version_number: String,
+    filename: String,
+    url: String,
+    path: PathBuf,
+    sha1: String,
+    sha512: String,
+    sha256: String,
+}
+
+fn resolve_modrinth_mod(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+    project: &str,
+) -> Result<ModrinthMod, String> {
+    let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let cache_dir = dirs.cache.join("downloads").join("modrinth").join(project);
+    let metadata_url = modrinth_versions_url(project, instance);
+    let metadata_path = fetch_to_cache(
+        &metadata_url,
+        &cache_dir,
+        &format!("{}-{}-{}.json", project, instance.minecraft, instance.loader),
+    )?;
+    let metadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
+    let file_metadata = primary_modrinth_file(&metadata)
+        .ok_or_else(|| format!("Modrinth project `{project}` did not include a primary file"))?;
+    let filename = json_string(file_metadata, "filename")
+        .ok_or_else(|| format!("Modrinth project `{project}` primary file had no filename"))?;
+    let url = json_string(file_metadata, "url")
+        .ok_or_else(|| format!("Modrinth project `{project}` primary file had no URL"))?;
+    let path = fetch_to_cache(&url, &cache_dir, &filename)?;
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("failed to read Modrinth file {}: {error}", path.display()))?;
+
+    Ok(ModrinthMod {
+        project: project.to_string(),
+        version_id: json_string(&metadata, "id")
+            .ok_or_else(|| format!("Modrinth project `{project}` metadata had no version id"))?,
+        version_number: json_string(&metadata, "version_number")
+            .ok_or_else(|| format!("Modrinth project `{project}` metadata had no version number"))?,
+        filename,
+        url,
+        path,
+        sha1: json_object_string(file_metadata, "hashes", "sha1").unwrap_or_default(),
+        sha512: json_object_string(file_metadata, "hashes", "sha512").unwrap_or_default(),
+        sha256: sha256_hex(&bytes),
+    })
+}
+
+fn primary_modrinth_file(metadata: &str) -> Option<&str> {
+    let primary = metadata.find("\"primary\"")?;
+    let file_start = metadata[..primary].rfind('{')?;
+    Some(&metadata[file_start..])
+}
+
+fn modrinth_project(source: &str) -> Option<&str> {
+    source.strip_prefix("modrinth:")
+        .filter(|project| !project.is_empty())
+}
+
+fn modrinth_versions_url(project: &str, instance: &Instance) -> String {
+    if let Ok(url) = env::var("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL") {
+        return url;
+    }
+
+    format!(
+        "https://api.modrinth.com/v2/project/{project}/version?loaders=%5B%22{}%22%5D&game_versions=%5B%22{}%22%5D",
+        instance.loader, instance.minecraft
+    )
 }
 
 fn resolve_loader_metadata(
