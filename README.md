@@ -74,11 +74,11 @@ target/release/modstage resolve
 target/release/modstage run server my-instance --locked --timeout 120s
 ```
 
-Run the Liteminer validation target:
+Run a project from another directory:
 
 ```bash
-target/release/modstage --config /home/kaf/code/mods/liteminer/modstage.toml resolve
-target/release/modstage --config /home/kaf/code/mods/liteminer/modstage.toml run client liteminer-fabric-26.1.2 --locked --timeout 120s
+target/release/modstage --config ../example-mod/modstage.toml resolve
+target/release/modstage --config ../example-mod/modstage.toml run client example-fabric-26.1.2 --locked --timeout 120s
 ```
 
 ## Configuration
@@ -170,9 +170,9 @@ The Forge and NeoForge client setup follows the same broad model as the Modrinth
 
 | Reference | Purpose |
 | --- | --- |
-| `/home/kaf/code/oss/code/packages/app-lib/src/launcher/mod.rs` | Launcher processor and data model |
-| `/home/kaf/code/oss/code/packages/app-lib/src/launcher/args.rs` | Launch argument and placeholder handling |
-| `/home/kaf/code/oss/code/packages/app-lib/src/launcher/download.rs` | Minecraft asset and library download model |
+| [`packages/app-lib/src/launcher/mod.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/mod.rs) | Launcher processor and data model |
+| [`packages/app-lib/src/launcher/args.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/args.rs) | Launch argument and placeholder handling |
+| [`packages/app-lib/src/launcher/download.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/download.rs) | Minecraft asset and library download model |
 
 ## Reports
 
@@ -201,17 +201,16 @@ Downloads use `reqwest` with Rustls. Locked asset restoration is parallel by def
 
 ## Validation
 
-Current validation target:
+Validation target used during development:
 
 ```text
-/home/kaf/code/mods/liteminer
 Minecraft 26.1.2
-Liteminer 3.1.0+26.1.2
+Target mod version 3.1.0+26.1.2
 Fabric, Forge, NeoForge
 Java 25
 ```
 
-Observed local matrix:
+Observed validation matrix:
 
 | Command | Result |
 | --- | --- |
@@ -222,7 +221,7 @@ Observed local matrix:
 | `run client liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed after NeoForge client staging and TeaKit readiness |
 | `run server liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed through NeoForge installer argfiles |
 
-Cold Fabric measurement on the Liteminer target, with no lockfile and no Modstage cache/data:
+Cold Fabric measurement on the validation target, with no lockfile and no Modstage cache/data:
 
 | Build | Time |
 | --- | ---: |
