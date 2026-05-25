@@ -546,6 +546,31 @@ fn run_instance(
     )
     .map_err(|error| format!("failed to write run report: {error}"))?;
 
+    if side == "server"
+        && let Some(server_url) = locked_minecraft_url(root, "server_url")?
+    {
+        let result = launch_server_instance(
+            &config,
+            instance,
+            root,
+            &game_dir,
+            &run_dir,
+            &server_url,
+            &options,
+        )?;
+
+        if result.success {
+            return Ok(());
+        }
+
+        return Err(format!(
+            "server run failed with exit code {}",
+            result.exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+
     Err(format!(
         "launch is not implemented yet; staged instance at {} and report at {}",
         game_dir.display(),
@@ -555,11 +580,15 @@ fn run_instance(
 
 struct RunOptions {
     locked: bool,
+    java: Option<PathBuf>,
+    timeout: Option<String>,
 }
 
 impl RunOptions {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut locked = false;
+        let mut java = None;
+        let mut timeout = None;
         let mut index = 0;
 
         while index < args.len() {
@@ -568,18 +597,89 @@ impl RunOptions {
                     locked = true;
                     index += 1;
                 }
+                "--java" => {
+                    let Some(path) = args.get(index + 1) else {
+                        return Err("--java requires a path".to_string());
+                    };
+                    java = Some(PathBuf::from(path));
+                    index += 2;
+                }
                 "--timeout" => {
-                    let Some(_timeout) = args.get(index + 1) else {
+                    let Some(value) = args.get(index + 1) else {
                         return Err("--timeout requires a duration".to_string());
                     };
+                    timeout = Some(value.clone());
                     index += 2;
                 }
                 option => return Err(format!("unknown run option `{option}`")),
             }
         }
 
-        Ok(Self { locked })
+        Ok(Self {
+            locked,
+            java,
+            timeout,
+        })
     }
+}
+
+struct RunResult {
+    success: bool,
+    exit_code: Option<i32>,
+}
+
+fn launch_server_instance(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+    game_dir: &Path,
+    run_dir: &Path,
+    server_url: &str,
+    options: &RunOptions,
+) -> Result<RunResult, String> {
+    let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let cache_dir = dirs.cache.join("downloads").join("mojang");
+    let server_jar = fetch_to_cache(server_url, &cache_dir, "server.jar")?;
+    let java = options
+        .java
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(java_bin()));
+    let output = Command::new(&java)
+        .arg("-jar")
+        .arg(&server_jar)
+        .arg("nogui")
+        .current_dir(game_dir)
+        .output()
+        .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
+
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+    fs::write(run_dir.join("stdout.log"), &output.stdout)
+        .map_err(|error| format!("failed to write stdout log: {error}"))?;
+    fs::write(run_dir.join("stderr.log"), &output.stderr)
+        .map_err(|error| format!("failed to write stderr log: {error}"))?;
+
+    let exit_code = output.status.code();
+    let success = output.status.success();
+    fs::write(
+        run_dir.join("run.toml"),
+        format!(
+            "instance = \"{}\"\nside = \"server\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nserver_jar = \"{}\"\nexit_code = {}\ntimed_out = false\ntimeout = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\n",
+            instance.name,
+            if success { "passed" } else { "failed" },
+            game_dir.display(),
+            java.display(),
+            server_jar.display(),
+            exit_code.unwrap_or(-1),
+            options.timeout.as_deref().unwrap_or(""),
+            run_dir.join("stdout.log").display(),
+            run_dir.join("stderr.log").display()
+        ),
+    )
+    .map_err(|error| format!("failed to write run report: {error}"))?;
+
+    Ok(RunResult { success, exit_code })
 }
 
 fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {
@@ -651,6 +751,17 @@ fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String>
     }
 
     Ok(None)
+}
+
+fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
+    let lock_path = root.join("modstage.lock");
+    if !lock_path.is_file() {
+        return Ok(None);
+    }
+
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    Ok(block_string_value(&lock, key))
 }
 
 fn block_string_value(block: &str, key: &str) -> Option<String> {

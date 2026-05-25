@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -310,6 +313,160 @@ mods = [
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_server_executes_resolved_minecraft_artifact_with_configured_java() {
+    let project = temp_dir("run-exec-project");
+    let metadata = temp_dir("run-exec-metadata");
+    let data_home = temp_dir("run-exec-data");
+    let cache_home = temp_dir("run-exec-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'fake java stdout\\n'\nprintf 'fake java stderr\\n' >&2\nprintf '%s\\n' \"$@\" > java-args.txt\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-exec"
+
+[[instance]]
+name = "server-exec-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-exec-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "server-exec-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        run.status.success(),
+        "run should execute the configured Java command\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("fake java stdout"),
+        "run should stream process stdout"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("fake java stderr"),
+        "run should stream process stderr"
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let game_dir = first_child(&state_root)
+        .join("server-exec-26.1.2")
+        .join("server")
+        .join("game");
+    let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
+        .expect("fake java should record its launch args");
+    assert!(
+        java_args.contains("-jar") && java_args.contains("server.jar") && java_args.contains("nogui"),
+        "server launch should execute java -jar <server.jar> nogui\n{java_args}"
+    );
+
+    let reports_root = data_home.join("modstage").join("runs");
+    let report_path = first_descendant_file(&reports_root, "run.toml");
+    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report = fs::read_to_string(&report_path).expect("run report should be readable");
+    for expected in [
+        r#"instance = "server-exec-26.1.2""#,
+        r#"side = "server""#,
+        r#"status = "passed""#,
+        "exit_code = 0",
+        "timed_out = false",
+    ] {
+        assert!(
+            report.contains(expected),
+            "run report should contain {expected:?}\n{report}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(report_dir.join("stdout.log")).expect("stdout log should exist"),
+        "fake java stdout\n"
+    );
+    assert_eq!(
+        fs::read_to_string(report_dir.join("stderr.log")).expect("stderr log should exist"),
+        "fake java stderr\n"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
