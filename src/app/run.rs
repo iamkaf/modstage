@@ -198,10 +198,20 @@ fn launch_minecraft_instance(
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
     let success = output.status.success() && !timed_out;
+    let artifacts = collect_run_artifacts(game_dir, run_dir)?;
+    let failure_class = if artifacts.crash_report.is_some() {
+        "crash_report"
+    } else if timed_out {
+        "timeout"
+    } else if success {
+        "none"
+    } else {
+        "process_exit"
+    };
     fs::write(
         run_dir.join("run.toml"),
         format!(
-            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\n",
+            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
             instance.name,
             side,
             if timed_out {
@@ -217,8 +227,19 @@ fn launch_minecraft_instance(
             exit_code.unwrap_or(-1),
             timed_out,
             options.timeout.as_deref().unwrap_or(""),
+            failure_class,
             run_dir.join("stdout.log").display(),
-            run_dir.join("stderr.log").display()
+            run_dir.join("stderr.log").display(),
+            artifacts
+                .minecraft_log
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            artifacts
+                .crash_report
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default()
         ),
     )
     .map_err(|error| format!("failed to write run report: {error}"))?;
@@ -228,6 +249,66 @@ fn launch_minecraft_instance(
         exit_code,
         timed_out,
     })
+}
+
+struct RunArtifacts {
+    minecraft_log: Option<PathBuf>,
+    crash_report: Option<PathBuf>,
+}
+
+fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<RunArtifacts, String> {
+    let minecraft_log = copy_if_exists(
+        &game_dir.join("logs").join("latest.log"),
+        &run_dir.join("minecraft-latest.log"),
+    )?;
+    let crash_report = newest_crash_report(&game_dir.join("crash-reports"))?
+        .map(|path| copy_crash_report(&path, run_dir))
+        .transpose()?;
+
+    Ok(RunArtifacts {
+        minecraft_log,
+        crash_report,
+    })
+}
+
+fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, String> {
+    if !source.is_file() {
+        return Ok(None);
+    }
+
+    fs::copy(source, destination)
+        .map_err(|error| format!("failed to copy {}: {error}", source.display()))?;
+    Ok(Some(destination.to_path_buf()))
+}
+
+fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, String> {
+    if !crash_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut newest = None;
+    for entry in fs::read_dir(crash_dir)
+        .map_err(|error| format!("failed to read {}: {error}", crash_dir.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read crash report entry: {error}"))?
+            .path();
+        if path.is_file() {
+            newest = Some(path);
+        }
+    }
+
+    Ok(newest)
+}
+
+fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf, String> {
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| format!("crash report has no filename: {}", source.display()))?;
+    let destination = run_dir.join(file_name);
+    fs::copy(source, &destination)
+        .map_err(|error| format!("failed to copy crash report {}: {error}", source.display()))?;
+    Ok(destination)
 }
 
 struct TimedOutput {
@@ -416,4 +497,3 @@ fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
             .ok_or_else(|| "no modstage.toml found; run `modstage init`".to_string()),
     }
 }
-
