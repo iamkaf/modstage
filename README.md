@@ -166,14 +166,6 @@ Server runs watch for the standard Minecraft ready line, send `stop`, and accept
 
 Forge and NeoForge use installer metadata. Modstage reads installer profiles, resolves processor classpaths, expands launcher placeholders, runs client processors when needed, and uses installer-generated server argfiles for server launches.
 
-The Forge and NeoForge client setup follows the same broad model as the Modrinth app launcher code:
-
-| Reference | Purpose |
-| --- | --- |
-| [`packages/app-lib/src/launcher/mod.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/mod.rs) | Launcher processor and data model |
-| [`packages/app-lib/src/launcher/args.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/args.rs) | Launch argument and placeholder handling |
-| [`packages/app-lib/src/launcher/download.rs`](https://github.com/modrinth/code/blob/main/packages/app-lib/src/launcher/download.rs) | Minecraft asset and library download model |
-
 ## Reports
 
 Every run writes a report directory under the project run root.
@@ -199,35 +191,6 @@ Downloads use `reqwest` with Rustls. Locked asset restoration is parallel by def
 | --- | ---: | --- |
 | `MODSTAGE_DOWNLOAD_CONCURRENCY` | `32` | Worker count for restoring missing locked assets |
 
-## Validation
-
-Validation target used during development:
-
-```text
-Minecraft 26.1.2
-Target mod version 3.1.0+26.1.2
-Fabric, Forge, NeoForge
-Java 25
-```
-
-Observed validation matrix:
-
-| Command | Result |
-| --- | --- |
-| `run client liteminer-fabric-26.1.2 --locked --timeout 120s` | Passed after TeaKit readiness |
-| `run server liteminer-fabric-26.1.2 --locked --timeout 120s` | Passed after ready/stop shutdown |
-| `run client liteminer-forge-26.1.2 --locked --timeout 120s` | Passed after Forge client staging and TeaKit readiness |
-| `run server liteminer-forge-26.1.2 --locked --timeout 120s` | Passed through Forge installer argfiles |
-| `run client liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed after NeoForge client staging and TeaKit readiness |
-| `run server liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed through NeoForge installer argfiles |
-
-Cold Fabric measurement on the validation target, with no lockfile and no Modstage cache/data:
-
-| Build | Time |
-| --- | ---: |
-| Serial `curl` downloader | `485.77s` |
-| `reqwest` downloader with parallel asset restore | `23.97s` |
-
 ## CI And Releases
 
 | Workflow | Trigger | Behavior |
@@ -237,29 +200,10 @@ Cold Fabric measurement on the validation target, with no lockfile and no Modsta
 
 Release publishing is manual. Linux is the only release target for now.
 
-## Dependency Policy
+## Acknowledgements
 
-Modstage started with no Rust dependencies. It now uses a small explicit set because the launcher needs JSON parsing and a real HTTP client.
-
-| Dependency | Reason |
-| --- | --- |
-| `serde` | Structured metadata types |
-| `serde_json` | Mojang, Modrinth, Fabric, Forge, and NeoForge metadata |
-| `reqwest` | HTTP downloads without shelling out to `curl` |
-
-Dependency changes should be justified, pinned through `Cargo.lock`, and checked with `cargo audit`.
-
-## Development
-
-```bash
-cargo fmt --check
-cargo test
-cargo audit
-cargo build --release
-```
-
-Tests exercise CLI behavior through config files, lockfiles, staged instance state, local HTTP fixtures, fake Java processes, and run reports.
+Modstage builds on the public Minecraft launcher ecosystem and the behavior documented by Mojang, Fabric, Forge, NeoForge, Maven, and Modrinth. The project also owes design context to existing open source launchers, especially Modrinth App and Prism Launcher.
 
 ## License
 
-No license file is present yet.
+Modstage is licensed under the GNU General Public License, Version 3 only. See [LICENSE](LICENSE).
