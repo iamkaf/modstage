@@ -175,13 +175,35 @@ sides = ["data"]
 #[test]
 fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
     let project = temp_project("resolve-mods");
+    let repo = project.join("repo");
+    let teakit_dir = repo
+        .join("dev")
+        .join("kaf")
+        .join("teakit-fabric")
+        .join("0.1.0");
+    let liteminer_dir = repo
+        .join("com")
+        .join("iamkaf")
+        .join("liteminer")
+        .join("liteminer-fabric")
+        .join("3.1.0+26.1.2");
+    fs::create_dir_all(&teakit_dir).expect("failed to create TeaKit artifact dir");
+    fs::create_dir_all(&liteminer_dir).expect("failed to create Liteminer artifact dir");
+    fs::write(teakit_dir.join("teakit-fabric-0.1.0.jar"), b"teakit")
+        .expect("failed to write TeaKit jar");
+    fs::write(
+        liteminer_dir.join("liteminer-fabric-3.1.0+26.1.2.jar"),
+        b"liteminer",
+    )
+    .expect("failed to write Liteminer jar");
     fs::write(
         project.join("modstage.toml"),
-        r#"[project]
+        format!(
+            r#"[project]
 name = "resolve-mods"
 
 [repositories]
-kaf = "https://maven.kaf.dev/releases"
+kaf = "file://{}"
 fabric = "https://maven.fabricmc.net"
 
 [[instance]]
@@ -196,6 +218,8 @@ mods = [
   "maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2",
 ]
 "#,
+            repo.display()
+        ),
     )
     .expect("failed to write config");
 
@@ -215,11 +239,12 @@ mods = [
         r#"instance = "liteminer-fabric-26.1.2""#,
         r#"loader = "fabric""#,
         r#"loader_version = "latest""#,
-        r#"kaf = "https://maven.kaf.dev/releases""#,
+        &format!(r#"kaf = "file://{}""#, repo.display()),
         r#"fabric = "https://maven.fabricmc.net""#,
         r#""modrinth:fabric-api""#,
         r#""maven:dev.kaf:teakit-fabric:0.1.0""#,
         r#""maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2""#,
+        r#"repository = "kaf""#,
     ] {
         assert!(
             lock.contains(expected),
@@ -408,6 +433,51 @@ mods = [
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
+
+#[test]
+fn resolve_rejects_missing_maven_mod_artifacts() {
+    let project = temp_project("resolve-missing-maven");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-missing-maven"
+
+[repositories]
+local = "file:///does/not/exist"
+
+[[instance]]
+name = "missing-maven-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+mods = [
+  "maven:com.example:missing-mod:1.0.0",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in(&["resolve", "missing-maven-26.1.2"], &project);
+    assert!(
+        !output.status.success(),
+        "resolve should reject missing Maven mod artifacts"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to resolve Maven mod `maven:com.example:missing-mod:1.0.0`")
+            && stderr.contains("ordered repositories"),
+        "missing Maven mod error should explain the unresolved source\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr
+    );
+    assert!(
+        !project.join("modstage.lock").exists(),
+        "failed resolution must not write a lockfile missing the configured mod"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove temp project");
 }

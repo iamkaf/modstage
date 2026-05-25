@@ -174,7 +174,9 @@ sides = [{}]\n",
             ));
         } else if let Some(coordinates) = MavenCoordinates::parse(source) {
             let Some((repository, path)) = maven_artifact(&config.repositories, &coordinates) else {
-                continue;
+                return Err(format!(
+                    "failed to resolve Maven mod `{source}` from ordered repositories"
+                ));
             };
             let path = path
                 .canonicalize()
