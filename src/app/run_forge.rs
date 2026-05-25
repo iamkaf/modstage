@@ -13,7 +13,7 @@ pub(super) fn prepare_forge_server_launch(
     game_dir: &Path,
     java: &Path,
 ) -> Result<Option<ForgeServerLaunch>, String> {
-    if instance.loader != "forge" {
+    if !matches!(instance.loader.as_str(), "forge" | "neoforge") {
         return Ok(None);
     }
 
@@ -22,7 +22,7 @@ pub(super) fn prepare_forge_server_launch(
     };
     let coordinates = MavenCoordinates::parse_coordinate(&installer_maven)
         .ok_or_else(|| format!("invalid Forge installer coordinate `{installer_maven}`"))?;
-    let loader_args = forge_server_args_file(coordinates.version);
+    let loader_args = installer_server_args_file(&instance.loader, coordinates.version);
     let loader_args_path = game_dir.join(loader_args.trim_start_matches('@'));
     if loader_args_path.is_file() {
         return Ok(Some(ForgeServerLaunch {
@@ -85,11 +85,15 @@ fn forge_server_launch_args(game_dir: &Path, loader_args: String) -> Vec<String>
     args
 }
 
-fn forge_server_args_file(version: &str) -> String {
+fn installer_server_args_file(loader: &str, version: &str) -> String {
+    let (group_path, artifact) = match loader {
+        "neoforge" => ("net/neoforged", "neoforge"),
+        _ => ("net/minecraftforge", "forge"),
+    };
     let file_name = if cfg!(windows) {
         "win_args.txt"
     } else {
         "unix_args.txt"
     };
-    format!("@libraries/net/minecraftforge/forge/{version}/{file_name}")
+    format!("@libraries/{group_path}/{artifact}/{version}/{file_name}")
 }
