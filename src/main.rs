@@ -61,6 +61,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
         [command, subject] if command == "inspect" && subject == "config" => {
             inspect_config(invocation.config)
         }
+        [command, subject] if command == "inspect" && subject == "lock" => {
+            inspect_lock(invocation.config, None)
+        }
+        [command, subject, instance] if command == "inspect" && subject == "lock" => {
+            inspect_lock(invocation.config, Some(instance))
+        }
         [command, subject, run_id] if command == "inspect" && subject == "run" => {
             inspect_run(invocation.config, run_id)
         }
@@ -185,6 +191,23 @@ fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
     println!("data: {}", dirs.data.display());
     println!("cache: {}", dirs.cache.display());
 
+    Ok(())
+}
+
+fn inspect_lock(explicit_config: Option<PathBuf>, instance: Option<&str>) -> Result<(), String> {
+    let config_path = config_path(explicit_config)?;
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let lock_path = root.join("modstage.lock");
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+
+    if let Some(instance) = instance
+        && !lock.contains(&format!("instance = \"{instance}\""))
+    {
+        return Err(format!("lockfile does not contain instance `{instance}`"));
+    }
+
+    print!("{lock}");
     Ok(())
 }
 
