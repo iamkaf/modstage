@@ -95,11 +95,18 @@ pub(super) fn launch_minecraft_instance(
         &launch_args,
     )?;
     command.current_dir(game_dir);
-    let output = run_process_with_timeout(&mut command, options.timeout_duration()?)
+    let timeout = options.timeout_duration()?;
+    let output = if side == "server" {
+        run_server_process_with_timeout(&mut command, timeout)
+    } else {
+        run_process_with_timeout(&mut command, timeout)
+    }
         .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
 
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if !output.streamed {
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
 
     fs::write(run_dir.join("stdout.log"), &output.stdout)
         .map_err(|error| format!("failed to write stdout log: {error}"))?;
@@ -108,7 +115,7 @@ pub(super) fn launch_minecraft_instance(
 
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
-    let process_success = output.status.success() && !timed_out;
+    let process_success = (output.status.success() || output.graceful_stop) && !timed_out;
     let artifacts = collect_run_artifacts(game_dir, run_dir)?;
     let failure_class = classify_failure(process_success, timed_out, &artifacts)?;
     let success = process_success && failure_class == "none";

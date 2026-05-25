@@ -1299,6 +1299,261 @@ sides = ["server"]
 
 #[test]
 #[cfg(unix)]
+fn run_server_stops_after_minecraft_ready_log() {
+    let project = temp_dir("run-ready-project");
+    let metadata = temp_dir("run-ready-metadata");
+    let data_home = temp_dir("run-ready-data");
+    let cache_home = temp_dir("run-ready-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java-ready");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'Done (0.123s)! For help, type \"help\"\\n'\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" > stop-command.txt\n  if [ \"$line\" = stop ]; then\n    printf 'server stopped cleanly\\n'\n    exit 0\n  fi\ndone\nexit 19\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-ready"
+
+[[instance]]
+name = "server-ready-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-ready-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "server-ready-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "ready server run should stop cleanly instead of timing out\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let game_dir = first_child(&state_root)
+        .join("server-ready-26.1.2")
+        .join("server")
+        .join("game");
+    assert_eq!(
+        fs::read_to_string(game_dir.join("stop-command.txt"))
+            .expect("server should receive a stop command"),
+        "stop\n"
+    );
+
+    let reports_root = data_home.join("modstage").join("runs");
+    let report = fs::read_to_string(first_descendant_file(&reports_root, "run.toml"))
+        .expect("run report should be readable");
+    assert!(
+        report.contains(r#"status = "passed""#)
+            && report.contains("timed_out = false")
+            && report.contains(r#"failure_class = "none""#),
+        "ready server report should record a clean bounded pass\n{report}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_server_accepts_confirmed_shutdown_even_if_process_lingers() {
+    let project = temp_dir("run-lingering-shutdown-project");
+    let metadata = temp_dir("run-lingering-shutdown-metadata");
+    let data_home = temp_dir("run-lingering-shutdown-data");
+    let cache_home = temp_dir("run-lingering-shutdown-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java-lingering-shutdown");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'Done (0.123s)! For help, type \"help\"\\n'\nwhile IFS= read -r line; do\n  if [ \"$line\" = stop ]; then\n    printf 'Stopping server\\n'\n    printf 'ThreadedAnvilChunkStorage: All dimensions are saved\\n'\n    sleep 30\n  fi\ndone\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-lingering-shutdown"
+
+[[instance]]
+name = "server-lingering-shutdown-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-lingering-shutdown-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "server-lingering-shutdown-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "confirmed server shutdown should be accepted without waiting for a lingering process\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let reports_root = data_home.join("modstage").join("runs");
+    let report = fs::read_to_string(first_descendant_file(&reports_root, "run.toml"))
+        .expect("run report should be readable");
+    assert!(
+        report.contains(r#"status = "passed""#)
+            && report.contains("timed_out = false")
+            && report.contains(r#"failure_class = "none""#),
+        "confirmed shutdown should record a clean pass\n{report}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_server_stages_scenario_and_exposes_it_to_the_process() {
     let project = temp_dir("run-scenario-project");
     let metadata = temp_dir("run-scenario-metadata");
