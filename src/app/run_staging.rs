@@ -21,7 +21,7 @@ pub(super) fn reconcile_mods(
     }
 
     for source in &instance.mods {
-        let Some(path) = resolved_mod_path(root, source, cache_dir)? else {
+        let Some(path) = resolved_mod_path(root, instance, source, cache_dir)? else {
             continue;
         };
         let file_name = path
@@ -141,6 +141,7 @@ pub(super) fn copy_fixture_tree(
 
 pub(super) fn resolved_mod_path(
     root: &Path,
+    instance: &Instance,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<PathBuf>, String> {
@@ -151,7 +152,7 @@ pub(super) fn resolved_mod_path(
             .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()));
     }
 
-    if let Some(path) = restore_locked_mod_path(root, source, cache_dir)? {
+    if let Some(path) = restore_locked_mod_path(root, &instance.name, source, cache_dir)? {
         return path
             .canonicalize()
             .map(Some)

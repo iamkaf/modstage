@@ -6,7 +6,8 @@ pub(super) fn verify_locked_mod_hashes(
     cache_dir: &Path,
 ) -> Result<(), String> {
     for source in &instance.mods {
-        let Some((path, expected)) = restore_locked_mod_path_and_hash(root, source, cache_dir)?
+        let Some((path, expected)) =
+            restore_locked_mod_path_and_hash(root, &instance.name, source, cache_dir)?
         else {
             continue;
         };
@@ -25,11 +26,12 @@ pub(super) fn verify_locked_mod_hashes(
 
 pub(super) fn verify_locked_artifact_hash(
     root: &Path,
+    instance: &str,
     side: &str,
     artifact: &Path,
 ) -> Result<(), String> {
     let key = format!("{side}_sha256");
-    let Some(expected) = locked_value(root, &key)? else {
+    let Some(expected) = locked_value(root, instance, &key)? else {
         return Ok(());
     };
     let bytes = fs::read(artifact).map_err(|error| {
@@ -55,33 +57,33 @@ pub(super) struct LockedMod {
 
 pub(super) fn restore_locked_mod_path_and_hash(
     root: &Path,
+    instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    restore_locked_mod(root, source, cache_dir)
+    restore_locked_mod(root, instance, source, cache_dir)
         .map(|locked| locked.map(|locked| (locked.path, locked.sha256)))
 }
 
 pub(super) fn restore_locked_mod_path(
     root: &Path,
+    instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    restore_locked_mod(root, source, cache_dir).map(|locked| locked.map(|locked| locked.path))
+    restore_locked_mod(root, instance, source, cache_dir)
+        .map(|locked| locked.map(|locked| locked.path))
 }
 
 pub(super) fn restore_locked_mod(
     root: &Path,
+    instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<LockedMod>, String> {
-    let lock_path = root.join("modstage.lock");
-    if !lock_path.is_file() {
+    let Some(lock) = locked_instance_block(root, instance)? else {
         return Ok(None);
-    }
-
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    };
     for block in lock.split("[[mod]]").skip(1) {
         if block_string_value(block, "source").as_deref() == Some(source)
             && let Some(path) = block_string_value(block, "path")
@@ -114,14 +116,29 @@ pub(super) fn lock_is_stale_for_instance(lock_path: &Path, instance: &str) -> Re
 
     let lock = fs::read_to_string(lock_path)
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-    Ok(!lock.contains(&format!("instance = \"{instance}\"")))
+    Ok(instance_block(&lock, instance).is_none())
 }
 
-pub(super) fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
-    locked_value(root, key)
+pub(super) fn locked_minecraft_url(
+    root: &Path,
+    instance: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
+    locked_value(root, instance, key)
 }
 
-pub(super) fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
+pub(super) fn locked_value(
+    root: &Path,
+    instance: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
+    let Some(lock) = locked_instance_block(root, instance)? else {
+        return Ok(None);
+    };
+    Ok(block_string_value(&lock, key))
+}
+
+pub(super) fn locked_instance_block(root: &Path, instance: &str) -> Result<Option<String>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(None);
@@ -129,20 +146,30 @@ pub(super) fn locked_value(root: &Path, key: &str) -> Result<Option<String>, Str
 
     let lock = fs::read_to_string(&lock_path)
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-    Ok(block_string_value(&lock, key))
+    Ok(instance_block(&lock, instance).map(str::to_string))
 }
 
-pub(super) fn locked_main_class(root: &Path, side: &str) -> Result<Option<String>, String> {
+pub(super) fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
+    lock.split("[[instance]]")
+        .skip(1)
+        .find(|block| block_string_value(block, "instance").as_deref() == Some(instance))
+}
+
+pub(super) fn locked_main_class(
+    root: &Path,
+    instance: &str,
+    side: &str,
+) -> Result<Option<String>, String> {
     let side_key = format!("{side}_main_class");
-    if let Some(main_class) = locked_value(root, &side_key)? {
+    if let Some(main_class) = locked_value(root, instance, &side_key)? {
         return Ok(Some(main_class));
     }
 
-    locked_value(root, "main_class")
+    locked_value(root, instance, "main_class")
 }
 
-pub(super) fn locked_java_major(root: &Path) -> Result<Option<u32>, String> {
-    locked_value(root, "java_major")?
+pub(super) fn locked_java_major(root: &Path, instance: &str) -> Result<Option<u32>, String> {
+    locked_value(root, instance, "java_major")?
         .map(|value| {
             value
                 .parse()
@@ -153,16 +180,13 @@ pub(super) fn locked_java_major(root: &Path) -> Result<Option<u32>, String> {
 
 pub(super) fn fetch_locked_libraries(
     root: &Path,
+    instance: &str,
     cache_dir: &Path,
     side: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    let lock_path = root.join("modstage.lock");
-    if !lock_path.is_file() {
+    let Some(lock) = locked_instance_block(root, instance)? else {
         return Ok(Vec::new());
-    }
-
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    };
     let mut libraries = Vec::new();
     for block in lock.split("[[library]]").skip(1) {
         if let Some(library_side) = block_string_value(block, "side")
@@ -210,15 +234,15 @@ pub(super) fn verify_locked_library_hash(
     Ok(())
 }
 
-pub(super) fn fetch_locked_assets(root: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
+pub(super) fn fetch_locked_assets(
+    root: &Path,
+    instance: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
     let assets_dir = cache_dir.join("assets");
-    let lock_path = root.join("modstage.lock");
-    if !lock_path.is_file() {
+    let Some(lock) = locked_instance_block(root, instance)? else {
         return Ok(assets_dir);
-    }
-
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    };
     if let Some(index_url) = block_string_value(&lock, "index_url") {
         let id = block_string_value(&lock, "id").unwrap_or_else(|| "assets".to_string());
         let index_path = fetch_to_cache(

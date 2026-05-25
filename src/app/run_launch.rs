@@ -14,15 +14,16 @@ pub(super) fn launch_minecraft_instance(
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let artifact_name = format!("{side}.jar");
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
-    verify_locked_artifact_hash(root, side, &artifact)?;
+    verify_locked_artifact_hash(root, &instance.name, side, &artifact)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
-    let java = selected_java(root, options)?;
+    let java = selected_java(root, instance, options)?;
     let mut command = Command::new(&java);
     let mut launch_args = Vec::new();
-    if let Some(main_class) = locked_main_class(root, side)? {
+    if let Some(main_class) = locked_main_class(root, &instance.name, side)? {
         let mut classpath = vec![artifact.clone()];
         classpath.extend(fetch_locked_libraries(
             root,
+            &instance.name,
             &cache_dir.join("libraries"),
             side,
         )?);
@@ -32,14 +33,14 @@ pub(super) fn launch_minecraft_instance(
         launch_args.push(classpath);
         launch_args.push(main_class);
         if side == "client"
-            && let Some(asset_index) = locked_value(root, "id")?
+            && let Some(asset_index) = locked_value(root, &instance.name, "id")?
         {
             command.arg("--assetIndex").arg(&asset_index);
             launch_args.push("--assetIndex".to_string());
             launch_args.push(asset_index);
         }
-        if side == "client" && locked_value(root, "index_url")?.is_some() {
-            let assets_dir = fetch_locked_assets(root, &cache_dir)?;
+        if side == "client" && locked_value(root, &instance.name, "index_url")?.is_some() {
+            let assets_dir = fetch_locked_assets(root, &instance.name, &cache_dir)?;
             command.arg("--assetsDir").arg(&assets_dir);
             launch_args.push("--assetsDir".to_string());
             launch_args.push(assets_dir.display().to_string());
@@ -176,12 +177,16 @@ pub(super) fn print_run_summary(
     println!("report = \"{}\"", report_path.display());
 }
 
-pub(super) fn selected_java(root: &Path, options: &RunOptions) -> Result<PathBuf, String> {
+pub(super) fn selected_java(
+    root: &Path,
+    instance: &Instance,
+    options: &RunOptions,
+) -> Result<PathBuf, String> {
     if let Some(java) = &options.java {
         return Ok(java.clone());
     }
 
-    if let Some(major) = locked_java_major(root)? {
+    if let Some(major) = locked_java_major(root, &instance.name)? {
         if let Some(java) = managed_java_for_major(major)? {
             return Ok(java);
         }

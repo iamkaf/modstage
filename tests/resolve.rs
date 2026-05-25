@@ -150,6 +150,56 @@ fn inspect_lock_prints_the_generated_lockfile_for_an_instance() {
 }
 
 #[test]
+fn resolve_without_an_instance_writes_all_instances_into_one_lockfile() {
+    let project = temp_project("resolve-all");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-all-test"
+
+[[instance]]
+name = "first-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+
+[[instance]]
+name = "second-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write multi-instance config");
+
+    let output = run_in(&["resolve"], &project);
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    assert!(
+        lock.contains(r#"instance = "first-26.1.2""#)
+            && lock.contains(r#"instance = "second-26.1.2""#),
+        "resolve without an instance should lock every configured instance\n{lock}"
+    );
+
+    let inspect = run_in(&["inspect", "lock", "second-26.1.2"], &project);
+    assert!(
+        inspect.status.success(),
+        "inspect lock should find the second instance\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&inspect.stdout),
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
+
+#[test]
 fn resolve_rejects_unsupported_loaders_and_sides_in_launcher_language() {
     let project = temp_project("resolve-invalid-config");
     fs::write(

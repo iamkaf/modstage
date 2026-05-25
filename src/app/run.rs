@@ -84,7 +84,7 @@ pub(super) fn run_instance(
     } else {
         "client_url"
     };
-    if let Some(artifact_url) = locked_minecraft_url(root, artifact_key)? {
+    if let Some(artifact_url) = locked_minecraft_url(root, &instance.name, artifact_key)? {
         let result = launch_minecraft_instance(
             &config,
             instance,
