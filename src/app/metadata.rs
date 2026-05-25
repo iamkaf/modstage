@@ -299,14 +299,20 @@ pub(super) fn resolve_minecraft_metadata(
     let Some(manifest_url) = mojang_manifest_url() else {
         return Ok(None);
     };
+    let manifest_is_override = env::var("MODSTAGE_MOJANG_MANIFEST_URL").is_ok();
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let manifest_path = fetch_to_cache(&manifest_url, &cache_dir, "version_manifest.json")?;
     let manifest = fs::read(&manifest_path)
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     let manifest_text = String::from_utf8_lossy(&manifest);
-    let version_url = manifest_version_url(&manifest_text, &instance.minecraft)
-        .ok_or_else(|| format!("Minecraft version `{}` not found in manifest", instance.minecraft))?;
+    let Some(version_url) = manifest_version_url(&manifest_text, &instance.minecraft) else {
+        if manifest_is_override {
+            return Err(format!("Minecraft version `{}` not found in manifest", instance.minecraft));
+        }
+
+        return Ok(None);
+    };
     let version_path = fetch_to_cache(&version_url, &cache_dir, &format!("{}.json", instance.minecraft))?;
     let version = fs::read(&version_path)
         .map_err(|error| format!("failed to read {}: {error}", version_path.display()))?;
@@ -489,7 +495,9 @@ pub(super) fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&
 }
 
 pub(super) fn mojang_manifest_url() -> Option<String> {
-    env::var("MODSTAGE_MOJANG_MANIFEST_URL").ok()
+    Some(env::var("MODSTAGE_MOJANG_MANIFEST_URL").unwrap_or_else(|_| {
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".to_string()
+    }))
 }
 
 pub(super) fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBuf, String> {

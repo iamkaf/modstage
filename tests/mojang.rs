@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -128,6 +131,111 @@ sides = ["client", "server"]
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_uses_the_default_mojang_manifest_when_no_override_is_set() {
+    let project = temp_dir("mojang-default-project");
+    let metadata = temp_dir("mojang-default-metadata");
+    let data_home = temp_dir("mojang-default-data");
+    let cache_home = temp_dir("mojang-default-cache");
+    let fake_bin = temp_dir("mojang-default-bin");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let curl = fake_bin.join("curl");
+    fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://piston-meta.mojang.com/mc/game/version_manifest_v2.json) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            metadata.display(),
+            manifest.display()
+        ),
+    )
+    .expect("failed to write fake curl");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "mojang-default-test"
+
+[[instance]]
+name = "vanilla-default-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = run_in_with_env(
+        &["resolve", "vanilla-default-26.1.2"],
+        &project,
+        &[
+            ("PATH", &path),
+            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
+            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should use the default Mojang manifest\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+    assert!(
+        lock.contains(r#"manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json""#)
+            && lock.contains(r#"version = "26.1.2""#)
+            && lock.contains(r#"java_major = 25"#),
+        "lockfile should record metadata fetched through the default manifest\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
 }
 
 #[test]
