@@ -111,6 +111,7 @@ pub(super) fn managed_java_for_major(major: u32) -> Result<Option<PathBuf>, Stri
         if let Some(java) = block_string_value(&record, "java") {
             let java = PathBuf::from(java);
             if java.is_file() {
+                validate_managed_java_major(&java, major)?;
                 return Ok(Some(java));
             }
         }
@@ -118,10 +119,24 @@ pub(super) fn managed_java_for_major(major: u32) -> Result<Option<PathBuf>, Stri
 
     let java = install_dir.join("bin").join(java_bin());
     if java.is_file() {
+        validate_managed_java_major(&java, major)?;
         return Ok(Some(java));
     }
 
     Ok(None)
+}
+
+pub(super) fn validate_managed_java_major(java: &Path, expected: u32) -> Result<(), String> {
+    let info = inspect_java(java)?;
+    if info.major != expected {
+        return Err(format!(
+            "managed Java {} requires Java {expected} but reported Java {}",
+            java.display(),
+            info.major
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn discover_java_runtimes() -> Vec<PathBuf> {
