@@ -676,20 +676,27 @@ pub(super) fn minecraft_library_blocks(version_text: &str) -> Vec<&str> {
     let Some(libraries_start) = version_text.find("\"libraries\"") else {
         return Vec::new();
     };
-    let mut blocks = Vec::new();
-    let mut rest = &version_text[libraries_start..];
+    let libraries = &version_text[libraries_start..];
+    let Some(array_start) = libraries.find('[') else {
+        return Vec::new();
+    };
+    let array = &libraries[array_start + 1..];
+    let mut depth = 1_i32;
 
-    while let Some(name_position) = rest.find("\"name\"") {
-        let before_name = &rest[..name_position];
-        let Some(block_start) = before_name.rfind('{') else {
-            break;
-        };
-        let block = &rest[block_start..];
-        blocks.push(block);
-        rest = &rest[name_position + "\"name\"".len()..];
+    for (index, character) in array.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return json_object_blocks(&array[..index]);
+                }
+            }
+            _ => {}
+        }
     }
 
-    blocks
+    Vec::new()
 }
 
 pub(super) fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&'a str> {
@@ -746,11 +753,17 @@ pub(super) fn fetch_to_cache(
 }
 
 pub(super) fn manifest_version_url(manifest: &str, version: &str) -> Option<String> {
-    let id_key = manifest.find(&format!("\"{version}\""))?;
-    let before_id = &manifest[..id_key];
-    let id_field = before_id.rfind("\"id\"")?;
-    let after_version = &manifest[id_field..];
-    json_string(after_version, "url")
+    let mut rest = manifest;
+
+    while let Some(id_position) = rest.find("\"id\"") {
+        let candidate = &rest[id_position..];
+        if json_string(candidate, "id").as_deref() == Some(version) {
+            return json_string(candidate, "url");
+        }
+        rest = &candidate["\"id\"".len()..];
+    }
+
+    None
 }
 
 pub(super) fn json_string(text: &str, key: &str) -> Option<String> {

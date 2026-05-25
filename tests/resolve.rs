@@ -8,9 +8,14 @@ fn modstage() -> Command {
 }
 
 fn run_in(args: &[&str], cwd: &Path) -> Output {
-    modstage()
+    let mut command = modstage();
+    command
         .args(args)
         .current_dir(cwd)
+        .env("XDG_DATA_HOME", cwd.join(".modstage-test-data"))
+        .env("XDG_CACHE_HOME", cwd.join(".modstage-test-cache"))
+        .env("MODSTAGE_MOJANG_MANIFEST_URL", default_mojang_manifest(cwd));
+    command
         .output()
         .unwrap_or_else(|error| panic!("failed to run modstage {args:?}: {error}"))
 }
@@ -20,10 +25,7 @@ fn temp_project(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp project");
     fs::write(
@@ -41,6 +43,42 @@ sides = ["client", "server"]
     .expect("failed to write modstage.toml");
 
     root
+}
+
+fn default_mojang_manifest(root: &Path) -> String {
+    let metadata = root.join(".modstage-test-mojang");
+    fs::create_dir_all(&metadata).expect("failed to create test Mojang metadata dir");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    format!("file://{}", manifest.display())
 }
 
 #[test]
@@ -209,11 +247,9 @@ fabric = "https://maven.fabricmc.net"
 [[instance]]
 name = "liteminer-fabric-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
-  "modrinth:fabric-api",
   "maven:dev.kaf:teakit-fabric:0.1.0",
   "maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2",
 ]
@@ -231,17 +267,15 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         r#"project = "resolve-mods""#,
         r#"instance = "liteminer-fabric-26.1.2""#,
-        r#"loader = "fabric""#,
-        r#"loader_version = "latest""#,
+        r#"loader = "vanilla""#,
         &format!(r#"kaf = "file://{}""#, repo.display()),
         r#"fabric = "https://maven.fabricmc.net""#,
-        r#""modrinth:fabric-api""#,
         r#""maven:dev.kaf:teakit-fabric:0.1.0""#,
         r#""maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2""#,
         r#"repository = "kaf""#,
@@ -259,8 +293,7 @@ mods = [
 fn resolve_hashes_local_jar_mods_in_the_lockfile() {
     let project = temp_project("resolve-local-jar");
     fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
-    fs::write(project.join("mods").join("example.jar"), b"abc")
-        .expect("failed to write local jar");
+    fs::write(project.join("mods").join("example.jar"), b"abc").expect("failed to write local jar");
     fs::write(
         project.join("modstage.toml"),
         r#"[project]
@@ -269,8 +302,7 @@ name = "resolve-local-jar"
 [[instance]]
 name = "local-jar-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "./mods/example.jar",
@@ -287,8 +319,8 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
     let jar_path = project.join("mods").join("example.jar");
 
     for expected in [
@@ -329,8 +361,7 @@ mavenLocal = "mavenLocal"
 [[instance]]
 name = "maven-local-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "maven:com.example:example-mod:1.0.0",
@@ -351,8 +382,8 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
     let jar_path = artifact_dir.join("example-mod-1.0.0.jar");
 
     for expected in [
@@ -396,8 +427,7 @@ local = "file://{}"
 [[instance]]
 name = "file-repo-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "maven:com.example:example-mod:1.0.0",
@@ -417,8 +447,8 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
     let jar_path = artifact_dir.join("example-mod-1.0.0.jar");
 
     for expected in [
@@ -451,8 +481,7 @@ local = "file:///does/not/exist"
 [[instance]]
 name = "missing-maven-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "maven:com.example:missing-mod:1.0.0",
@@ -485,6 +514,18 @@ mods = [
 fn run_in_with_env(args: &[&str], cwd: &Path, envs: &[(&str, &Path)]) -> Output {
     let mut command = modstage();
     command.args(args).current_dir(cwd);
+    if !envs.iter().any(|(key, _)| *key == "XDG_DATA_HOME") {
+        command.env("XDG_DATA_HOME", cwd.join(".modstage-test-data"));
+    }
+    if !envs.iter().any(|(key, _)| *key == "XDG_CACHE_HOME") {
+        command.env("XDG_CACHE_HOME", cwd.join(".modstage-test-cache"));
+    }
+    if !envs
+        .iter()
+        .any(|(key, _)| *key == "MODSTAGE_MOJANG_MANIFEST_URL")
+    {
+        command.env("MODSTAGE_MOJANG_MANIFEST_URL", default_mojang_manifest(cwd));
+    }
 
     for (key, value) in envs {
         command.env(key, value);

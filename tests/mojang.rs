@@ -28,10 +28,7 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
@@ -93,8 +90,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -105,8 +108,8 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[minecraft]",
@@ -126,6 +129,103 @@ sides = ["client", "server"]
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+fn resolve_finds_mojang_version_entry_when_latest_mentions_version_first() {
+    let project = temp_dir("mojang-latest-project");
+    let metadata = temp_dir("mojang-latest-metadata");
+    let data_home = temp_dir("mojang-latest-data");
+    let cache_home = temp_dir("mojang-latest-cache");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{
+  "latest": {{ "release": "26.1.2", "snapshot": "26.2-snapshot-8" }},
+  "versions": [
+    {{ "id": "26.2-snapshot-8", "url": "file:///not-used.json" }},
+    {{ "id": "26.1.2", "url": "file://{}" }}
+  ]
+}}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "mojang-latest-test"
+
+[[instance]]
+name = "vanilla-latest-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let output = run_in_with_env(
+        &["resolve", "vanilla-latest-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should use the version entry, not latest.release\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    assert!(
+        lock.contains("[minecraft]")
+            && lock.contains(&format!(
+                r#"version_url = "file://{}""#,
+                version_json.display()
+            )),
+        "lockfile should include Minecraft metadata from the matching version entry\n{lock}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
@@ -210,8 +310,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("PATH", &path),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -222,11 +328,12 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
     assert!(
-        lock.contains(r#"manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json""#)
-            && lock.contains(r#"version = "26.1.2""#)
+        lock.contains(
+            r#"manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json""#
+        ) && lock.contains(r#"version = "26.1.2""#)
             && lock.contains(r#"java_major = 25"#),
         "lockfile should record metadata fetched through the default manifest\n{lock}"
     );
@@ -264,6 +371,7 @@ fn resolve_records_mojang_main_class_and_libraries() {
   }},
   "libraries": [{{
     "name": "com.example:example-lib:1.0.0",
+    "rules": [{{ "action": "allow", "os": {{ "name": "osx" }} }}],
     "downloads": {{
       "artifact": {{
         "path": "com/example/example-lib/1.0.0/example-lib-1.0.0.jar",
@@ -307,8 +415,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -319,8 +433,8 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[launch]",
@@ -336,6 +450,10 @@ sides = ["client", "server"]
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+    assert!(
+        !lock.contains(r#"name = "osx""#),
+        "library parser must not treat rule OS names as library coordinates\n{lock}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
@@ -424,8 +542,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -436,8 +560,8 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[assets]",

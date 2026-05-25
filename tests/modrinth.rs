@@ -10,6 +10,12 @@ fn modstage() -> Command {
 fn run_in_with_env(args: &[&str], cwd: &Path, envs: &[(&str, &str)]) -> Output {
     let mut command = modstage();
     command.args(args).current_dir(cwd);
+    if !envs
+        .iter()
+        .any(|(key, _)| *key == "MODSTAGE_MOJANG_MANIFEST_URL")
+    {
+        command.env("MODSTAGE_MOJANG_MANIFEST_URL", default_mojang_manifest(cwd));
+    }
 
     for (key, value) in envs {
         command.env(key, value);
@@ -25,13 +31,46 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
+}
+
+fn default_mojang_manifest(root: &Path) -> String {
+    let metadata = root.join(".modstage-test-mojang");
+    fs::create_dir_all(&metadata).expect("failed to create test Mojang metadata dir");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    format!("file://{}", manifest.display())
 }
 
 #[test]
@@ -51,7 +90,7 @@ fn resolve_downloads_direct_modrinth_mod_file_into_the_lockfile() {
   "project_id": "sample-project",
   "version_number": "1.0.0",
   "game_versions": ["26.1.2"],
-  "loaders": ["fabric"],
+  "loaders": ["vanilla"],
   "files": [{{
     "primary": true,
     "filename": "sample-mod-1.0.0.jar",
@@ -74,8 +113,7 @@ name = "modrinth-test"
 [[instance]]
 name = "modrinth-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "modrinth:sample-mod",
@@ -90,8 +128,14 @@ mods = [
         &project,
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -102,8 +146,8 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[[mod]]",
@@ -149,7 +193,7 @@ fn resolve_honors_a_pinned_modrinth_version_source() {
   "project_id": "sample-project",
   "version_number": "1.0.0",
   "game_versions": ["26.1.2"],
-  "loaders": ["fabric"],
+  "loaders": ["vanilla"],
   "files": [{{
     "primary": true,
     "filename": "sample-mod-1.0.0.jar",
@@ -161,7 +205,7 @@ fn resolve_honors_a_pinned_modrinth_version_source() {
   "project_id": "sample-project",
   "version_number": "2.0.0",
   "game_versions": ["26.1.2"],
-  "loaders": ["fabric"],
+  "loaders": ["vanilla"],
   "files": [{{
     "primary": true,
     "filename": "sample-mod-2.0.0.jar",
@@ -182,8 +226,7 @@ name = "modrinth-pinned-test"
 [[instance]]
 name = "modrinth-pinned-26.1.2"
 minecraft = "26.1.2"
-loader = "fabric"
-loader_version = "latest"
+loader = "vanilla"
 sides = ["client", "server"]
 mods = [
   "modrinth:sample-mod:2.0.0",
@@ -198,8 +241,14 @@ mods = [
         &project,
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -210,8 +259,8 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         r#"source = "modrinth:sample-mod:2.0.0""#,
