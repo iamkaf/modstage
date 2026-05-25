@@ -312,6 +312,7 @@ pub(super) struct MavenCoordinates<'a> {
     pub(super) group: &'a str,
     pub(super) artifact: &'a str,
     pub(super) version: &'a str,
+    pub(super) classifier: Option<&'a str>,
 }
 
 impl<'a> MavenCoordinates<'a> {
@@ -325,6 +326,7 @@ impl<'a> MavenCoordinates<'a> {
         let group = parts.next()?;
         let artifact = parts.next()?;
         let version = parts.next()?;
+        let classifier = parts.next();
 
         if parts.next().is_some() {
             return None;
@@ -334,22 +336,32 @@ impl<'a> MavenCoordinates<'a> {
             group,
             artifact,
             version,
+            classifier,
         })
     }
 
     pub(super) fn artifact_relative_path(&self) -> String {
+        let classifier = self
+            .classifier
+            .map(|classifier| format!("-{classifier}"))
+            .unwrap_or_default();
         format!(
-            "{}/{}/{}/{}-{}.jar",
+            "{}/{}/{}/{}-{}{}.jar",
             self.group.replace('.', "/"),
             self.artifact,
             self.version,
             self.artifact,
-            self.version
+            self.version,
+            classifier
         )
     }
 
     pub(super) fn file_name(&self) -> String {
-        format!("{}-{}.jar", self.artifact, self.version)
+        let classifier = self
+            .classifier
+            .map(|classifier| format!("-{classifier}"))
+            .unwrap_or_default();
+        format!("{}-{}{}.jar", self.artifact, self.version, classifier)
     }
 }
 

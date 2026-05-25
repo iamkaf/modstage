@@ -199,7 +199,7 @@ fn resolve_uses_pinned_neoforge_loader_version_without_metadata_override() {
     fs::write(
         &curl,
         format!(
-            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.neoforged.net/releases/net/neoforged/neoforge/26.1.2.22-beta/neoforge-26.1.2.22-beta.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.neoforged.net/releases/net/neoforged/neoforge/26.1.2.22-beta/neoforge-26.1.2.22-beta-installer.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
             metadata.display(),
             installer.display()
         ),
@@ -258,8 +258,8 @@ sides = ["client", "server"]
     let urls = fs::read_to_string(metadata.join("curl-urls.txt"))
         .expect("fake curl should record fetched URLs");
     assert!(
-        urls.contains("https://maven.neoforged.net/releases/net/neoforged/neoforge/26.1.2.22-beta/neoforge-26.1.2.22-beta.jar"),
-        "resolve should fetch the pinned NeoForge installer from built-in Maven\n{urls}"
+        urls.contains("https://maven.neoforged.net/releases/net/neoforged/neoforge/26.1.2.22-beta/neoforge-26.1.2.22-beta-installer.jar"),
+        "resolve should fetch the pinned NeoForge installer classifier from built-in Maven\n{urls}"
     );
 
     let lock =
@@ -267,10 +267,10 @@ sides = ["client", "server"]
     for expected in [
         r#"kind = "neoforge""#,
         r#"version = "26.1.2.22-beta""#,
-        r#"installer_maven = "net.neoforged:neoforge:26.1.2.22-beta""#,
+        r#"installer_maven = "net.neoforged:neoforge:26.1.2.22-beta:installer""#,
         r#"client_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
         r#"server_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
-        r#"name = "net.neoforged:neoforge:26.1.2.22-beta""#,
+        r#"name = "net.neoforged:neoforge:26.1.2.22-beta:installer""#,
         r#"repository = "neoforge""#,
     ] {
         assert!(

@@ -199,7 +199,7 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
     fs::write(
         &curl,
         format!(
-            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
             metadata.display(),
             installer.display()
         ),
@@ -258,8 +258,8 @@ sides = ["client", "server"]
     let urls = fs::read_to_string(metadata.join("curl-urls.txt"))
         .expect("fake curl should record fetched URLs");
     assert!(
-        urls.contains("https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4.jar"),
-        "resolve should fetch the pinned Forge installer from built-in Maven\n{urls}"
+        urls.contains("https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar"),
+        "resolve should fetch the pinned Forge installer classifier from built-in Maven\n{urls}"
     );
 
     let lock =
@@ -267,10 +267,10 @@ sides = ["client", "server"]
     for expected in [
         r#"kind = "forge""#,
         r#"version = "26.1.2-64.0.4""#,
-        r#"installer_maven = "net.minecraftforge:forge:26.1.2-64.0.4""#,
+        r#"installer_maven = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#,
         r#"client_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
         r#"server_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
-        r#"name = "net.minecraftforge:forge:26.1.2-64.0.4""#,
+        r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#,
         r#"repository = "forge""#,
     ] {
         assert!(

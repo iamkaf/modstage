@@ -444,8 +444,8 @@ pub(super) fn pinned_installer_loader_metadata(
     }
 
     let installer_maven = match loader {
-        "neoforge" => format!("net.neoforged:neoforge:{version}"),
-        "forge" => format!("net.minecraftforge:forge:{version}"),
+        "neoforge" => format!("net.neoforged:neoforge:{version}:installer"),
+        "forge" => format!("net.minecraftforge:forge:{version}:installer"),
         _ => return Ok(None),
     };
 
