@@ -1,24 +1,13 @@
 use super::*;
 
 pub(super) fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
-    let config_path = match explicit_config {
-        Some(path) => path,
-        None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?
-            .ok_or_else(|| "no modstage.toml found; run `modstage init`".to_string())?,
-    };
+    let project = ProjectContext::load_summary(explicit_config)?;
 
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let project_name = project_name(&contents)
-        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let dirs = StateDirs::for_project(&project_name, root)?;
-
-    println!("config: {}", config_path.display());
-    println!("project: {project_name}");
-    println!("state-id: {}", dirs.project_id);
-    println!("data: {}", dirs.data.display());
-    println!("cache: {}", dirs.cache.display());
+    println!("config: {}", project.config_path.display());
+    println!("project: {}", project.config.project_name);
+    println!("state-id: {}", project.dirs.project_id);
+    println!("data: {}", project.dirs.data.display());
+    println!("cache: {}", project.dirs.cache.display());
 
     Ok(())
 }
@@ -27,9 +16,8 @@ pub(super) fn inspect_lock(
     explicit_config: Option<PathBuf>,
     instance: Option<&str>,
 ) -> Result<(), String> {
-    let config_path = config_path(explicit_config)?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let lock_path = root.join("modstage.lock");
+    let project = ProjectContext::load_summary(explicit_config)?;
+    let lock_path = project.lock_path();
     let lock = fs::read_to_string(&lock_path)
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
 
@@ -44,17 +32,12 @@ pub(super) fn inspect_lock(
 }
 
 pub(super) fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), String> {
-    let config_path = config_path(explicit_config)?;
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let project_name = project_name(&contents)
-        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let dirs = StateDirs::for_project(&project_name, root)?;
-    let report_path = dirs
+    let project = ProjectContext::load_summary(explicit_config)?;
+    let report_path = project
+        .dirs
         .data
         .join("runs")
-        .join(&dirs.project_id)
+        .join(&project.dirs.project_id)
         .join(run_id)
         .join("run.toml");
     let report = fs::read_to_string(&report_path)
@@ -70,17 +53,12 @@ pub(super) fn inspect_instance(
     instance_name: &str,
     args: &[String],
 ) -> Result<(), String> {
-    let config_path = config_path(explicit_config)?;
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let project_name = project_name(&contents)
-        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let dirs = StateDirs::for_project(&project_name, root)?;
-    let instance_dir = dirs
+    let project = ProjectContext::load_summary(explicit_config)?;
+    let instance_dir = project
+        .dirs
         .data
         .join("instances")
-        .join(&dirs.project_id)
+        .join(&project.dirs.project_id)
         .join(instance_name);
 
     if let Some(side) = parse_side_arg(args)? {
@@ -176,17 +154,12 @@ pub(super) fn clean_instance(
     instance_name: &str,
     args: &[String],
 ) -> Result<(), String> {
-    let config_path = config_path(explicit_config)?;
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let project_name = project_name(&contents)
-        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let dirs = StateDirs::for_project(&project_name, root)?;
-    let mut target = dirs
+    let project = ProjectContext::load_summary(explicit_config)?;
+    let mut target = project
+        .dirs
         .data
         .join("instances")
-        .join(&dirs.project_id)
+        .join(&project.dirs.project_id)
         .join(instance_name);
 
     if let Some(side) = parse_side_arg(args)? {
@@ -204,20 +177,15 @@ pub(super) fn clean_instance(
 }
 
 pub(super) fn clean_cache(explicit_config: Option<PathBuf>) -> Result<(), String> {
-    let config_path = config_path(explicit_config)?;
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let project_name = project_name(&contents)
-        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let dirs = StateDirs::for_project(&project_name, root)?;
+    let project = ProjectContext::load_summary(explicit_config)?;
 
-    if dirs.cache.exists() {
-        fs::remove_dir_all(&dirs.cache)
-            .map_err(|error| format!("failed to remove {}: {error}", dirs.cache.display()))?;
+    if project.dirs.cache.exists() {
+        fs::remove_dir_all(&project.dirs.cache).map_err(|error| {
+            format!("failed to remove {}: {error}", project.dirs.cache.display())
+        })?;
     }
 
-    println!("removed {}", dirs.cache.display());
+    println!("removed {}", project.dirs.cache.display());
 
     Ok(())
 }

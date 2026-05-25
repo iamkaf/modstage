@@ -76,63 +76,85 @@ pub(super) fn run_server_process_with_timeout(
     command: &mut Command,
     timeout: Option<Duration>,
 ) -> Result<TimedOutput, String> {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("process spawn failed: {error}"))?;
-    let mut child_stdin = child.stdin.take();
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "failed to capture process stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "failed to capture process stderr".to_string())?;
-    let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-    let (event_sender, event_receiver) = mpsc::channel();
-    let stdout_thread = spawn_process_reader(
-        stdout,
-        Arc::clone(&stdout_buffer),
-        Some(event_sender),
-        ProcessStream::Stdout,
-    );
-    let stderr_thread = spawn_process_reader(
-        stderr,
-        Arc::clone(&stderr_buffer),
-        None,
-        ProcessStream::Stderr,
-    );
-    let deadline = timeout.map(|timeout| Instant::now() + timeout);
-    let mut sent_stop = false;
+    ProcessSupervisor::new(ProcessPolicy::Server).run(command, timeout)
+}
 
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("process wait failed: {error}"))?
-        {
-            stdout_thread
-                .join()
-                .map_err(|_| "stdout reader thread panicked".to_string())?;
-            stderr_thread
-                .join()
-                .map_err(|_| "stderr reader thread panicked".to_string())?;
-            return Ok(TimedOutput {
-                status,
-                stdout: clone_buffer(&stdout_buffer)?,
-                stderr: clone_buffer(&stderr_buffer)?,
-                timed_out: false,
-                streamed: true,
-                graceful_stop: false,
-            });
+pub(super) fn run_client_process_with_timeout(
+    command: &mut Command,
+    timeout: Option<Duration>,
+) -> Result<TimedOutput, String> {
+    ProcessSupervisor::new(ProcessPolicy::Client).run(command, timeout)
+}
+
+struct ProcessSupervisor {
+    policy: ProcessPolicy,
+}
+
+impl ProcessSupervisor {
+    fn new(policy: ProcessPolicy) -> Self {
+        Self { policy }
+    }
+
+    fn run(&self, command: &mut Command, timeout: Option<Duration>) -> Result<TimedOutput, String> {
+        if matches!(self.policy, ProcessPolicy::Server) {
+            command.stdin(Stdio::piped());
         }
 
-        for event in event_receiver.try_iter() {
-            match event {
-                ProcessEvent::Ready if !sent_stop => {
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("process spawn failed: {error}"))?;
+        let mut child_stdin = child.stdin.take();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to capture process stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to capture process stderr".to_string())?;
+        let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+        let (event_sender, event_receiver) = mpsc::channel();
+        let stdout_thread = spawn_process_reader(
+            stdout,
+            Arc::clone(&stdout_buffer),
+            Some(event_sender),
+            ProcessStream::Stdout,
+        );
+        let stderr_thread = spawn_process_reader(
+            stderr,
+            Arc::clone(&stderr_buffer),
+            None,
+            ProcessStream::Stderr,
+        );
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let mut sent_stop = false;
+
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("process wait failed: {error}"))?
+            {
+                stdout_thread
+                    .join()
+                    .map_err(|_| "stdout reader thread panicked".to_string())?;
+                stderr_thread
+                    .join()
+                    .map_err(|_| "stderr reader thread panicked".to_string())?;
+                return Ok(TimedOutput {
+                    status,
+                    stdout: clone_buffer(&stdout_buffer)?,
+                    stderr: clone_buffer(&stderr_buffer)?,
+                    timed_out: false,
+                    streamed: true,
+                    graceful_stop: false,
+                });
+            }
+
+            for event in event_receiver.try_iter() {
+                if self.policy.should_send_stop(&event, sent_stop) {
                     if let Some(mut stdin) = child_stdin.take() {
                         stdin.write_all(b"stop\n").map_err(|error| {
                             format!("failed to write server stop command: {error}")
@@ -142,12 +164,17 @@ pub(super) fn run_server_process_with_timeout(
                         })?;
                     }
                     sent_stop = true;
-                }
-                ProcessEvent::ShutdownComplete if sent_stop => {
+                } else if self.policy.should_finish_gracefully(&event, sent_stop) {
                     let _ = child.kill();
                     let status = child
                         .wait()
                         .map_err(|error| format!("process wait failed: {error}"))?;
+                    stdout_thread
+                        .join()
+                        .map_err(|_| "stdout reader thread panicked".to_string())?;
+                    stderr_thread
+                        .join()
+                        .map_err(|_| "stderr reader thread panicked".to_string())?;
                     return Ok(TimedOutput {
                         status,
                         stdout: clone_buffer(&stdout_buffer)?,
@@ -157,92 +184,9 @@ pub(super) fn run_server_process_with_timeout(
                         graceful_stop: true,
                     });
                 }
-                _ => {}
             }
-        }
 
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .map_err(|error| format!("process wait failed: {error}"))?;
-            stdout_thread
-                .join()
-                .map_err(|_| "stdout reader thread panicked".to_string())?;
-            stderr_thread
-                .join()
-                .map_err(|_| "stderr reader thread panicked".to_string())?;
-            return Ok(TimedOutput {
-                status,
-                stdout: clone_buffer(&stdout_buffer)?,
-                stderr: clone_buffer(&stderr_buffer)?,
-                timed_out: true,
-                streamed: true,
-                graceful_stop: false,
-            });
-        }
-
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-pub(super) fn run_client_process_with_timeout(
-    command: &mut Command,
-    timeout: Option<Duration>,
-) -> Result<TimedOutput, String> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("process spawn failed: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "failed to capture process stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "failed to capture process stderr".to_string())?;
-    let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-    let (event_sender, event_receiver) = mpsc::channel();
-    let stdout_thread = spawn_process_reader(
-        stdout,
-        Arc::clone(&stdout_buffer),
-        Some(event_sender),
-        ProcessStream::Stdout,
-    );
-    let stderr_thread = spawn_process_reader(
-        stderr,
-        Arc::clone(&stderr_buffer),
-        None,
-        ProcessStream::Stderr,
-    );
-    let deadline = timeout.map(|timeout| Instant::now() + timeout);
-
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("process wait failed: {error}"))?
-        {
-            stdout_thread
-                .join()
-                .map_err(|_| "stdout reader thread panicked".to_string())?;
-            stderr_thread
-                .join()
-                .map_err(|_| "stderr reader thread panicked".to_string())?;
-            return Ok(TimedOutput {
-                status,
-                stdout: clone_buffer(&stdout_buffer)?,
-                stderr: clone_buffer(&stderr_buffer)?,
-                timed_out: false,
-                streamed: true,
-                graceful_stop: false,
-            });
-        }
-
-        for event in event_receiver.try_iter() {
-            if matches!(event, ProcessEvent::ClientReady) {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let _ = child.kill();
                 let status = child
                     .wait()
@@ -257,35 +201,32 @@ pub(super) fn run_client_process_with_timeout(
                     status,
                     stdout: clone_buffer(&stdout_buffer)?,
                     stderr: clone_buffer(&stderr_buffer)?,
-                    timed_out: false,
+                    timed_out: true,
                     streamed: true,
-                    graceful_stop: true,
+                    graceful_stop: false,
                 });
             }
-        }
 
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .map_err(|error| format!("process wait failed: {error}"))?;
-            stdout_thread
-                .join()
-                .map_err(|_| "stdout reader thread panicked".to_string())?;
-            stderr_thread
-                .join()
-                .map_err(|_| "stderr reader thread panicked".to_string())?;
-            return Ok(TimedOutput {
-                status,
-                stdout: clone_buffer(&stdout_buffer)?,
-                stderr: clone_buffer(&stderr_buffer)?,
-                timed_out: true,
-                streamed: true,
-                graceful_stop: false,
-            });
+            std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
 
-        std::thread::sleep(Duration::from_millis(10));
+enum ProcessPolicy {
+    Server,
+    Client,
+}
+
+impl ProcessPolicy {
+    fn should_send_stop(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
+        matches!(self, Self::Server) && matches!(event, ProcessEvent::Ready) && !sent_stop
+    }
+
+    fn should_finish_gracefully(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
+        match self {
+            Self::Server => matches!(event, ProcessEvent::ShutdownComplete) && sent_stop,
+            Self::Client => matches!(event, ProcessEvent::ClientReady),
+        }
     }
 }
 

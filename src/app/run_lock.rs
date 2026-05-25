@@ -1,5 +1,61 @@
 use super::*;
 
+pub(super) struct LockedInstance {
+    block: String,
+}
+
+impl LockedInstance {
+    pub(super) fn read(root: &Path, instance: &str) -> Result<Option<Self>, String> {
+        let lock_path = root.join("modstage.lock");
+        if !lock_path.is_file() {
+            return Ok(None);
+        }
+
+        let lock = fs::read_to_string(&lock_path)
+            .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+        Ok(instance_block(&lock, instance).map(|block| Self {
+            block: block.to_string(),
+        }))
+    }
+
+    pub(super) fn value(&self, key: &str) -> Option<String> {
+        block_string_value(&self.block, key)
+    }
+
+    pub(super) fn main_class(&self, side: &str) -> Option<String> {
+        let side_key = format!("{side}_main_class");
+        self.value(&side_key).or_else(|| self.value("main_class"))
+    }
+
+    pub(super) fn java_major(&self) -> Result<Option<u32>, String> {
+        self.value("java_major")
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|error| format!("invalid locked java_major `{value}`: {error}"))
+            })
+            .transpose()
+    }
+
+    pub(super) fn arguments(&self, kind: &str) -> Vec<String> {
+        let mut args = Vec::new();
+
+        for block in self.block.split("[[argument]]").skip(1) {
+            if block_string_value(block, "kind").as_deref() == Some(kind)
+                && let Some(arg) = block_string_value(block, "arg")
+            {
+                args.push(arg);
+            }
+        }
+
+        args
+    }
+
+    fn sections<'a>(&'a self, section: &str) -> impl Iterator<Item = &'a str> {
+        self.block.split(section).skip(1)
+    }
+}
+
 pub(super) fn verify_locked_mod_hashes(
     root: &Path,
     instance: &Instance,
@@ -81,10 +137,10 @@ pub(super) fn restore_locked_mod(
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<LockedMod>, String> {
-    let Some(lock) = locked_instance_block(root, instance)? else {
+    let Some(lock) = LockedInstance::read(root, instance)? else {
         return Ok(None);
     };
-    for block in lock.split("[[mod]]").skip(1) {
+    for block in lock.sections("[[mod]]") {
         if block_string_value(block, "source").as_deref() == Some(source)
             && let Some(path) = block_string_value(block, "path")
             && let Some(sha256) = block_string_value(block, "sha256")
@@ -132,21 +188,7 @@ pub(super) fn locked_value(
     instance: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
-    let Some(lock) = locked_instance_block(root, instance)? else {
-        return Ok(None);
-    };
-    Ok(block_string_value(&lock, key))
-}
-
-pub(super) fn locked_instance_block(root: &Path, instance: &str) -> Result<Option<String>, String> {
-    let lock_path = root.join("modstage.lock");
-    if !lock_path.is_file() {
-        return Ok(None);
-    }
-
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-    Ok(instance_block(&lock, instance).map(str::to_string))
+    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.value(key)))
 }
 
 pub(super) fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
@@ -160,22 +202,14 @@ pub(super) fn locked_main_class(
     instance: &str,
     side: &str,
 ) -> Result<Option<String>, String> {
-    let side_key = format!("{side}_main_class");
-    if let Some(main_class) = locked_value(root, instance, &side_key)? {
-        return Ok(Some(main_class));
-    }
-
-    locked_value(root, instance, "main_class")
+    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.main_class(side)))
 }
 
 pub(super) fn locked_java_major(root: &Path, instance: &str) -> Result<Option<u32>, String> {
-    locked_value(root, instance, "java_major")?
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|error| format!("invalid locked java_major `{value}`: {error}"))
-        })
+    LockedInstance::read(root, instance)?
+        .map(|lock| lock.java_major())
         .transpose()
+        .map(Option::flatten)
 }
 
 pub(super) fn locked_arguments(
@@ -183,20 +217,9 @@ pub(super) fn locked_arguments(
     instance: &str,
     kind: &str,
 ) -> Result<Vec<String>, String> {
-    let Some(lock) = locked_instance_block(root, instance)? else {
-        return Ok(Vec::new());
-    };
-    let mut args = Vec::new();
-
-    for block in lock.split("[[argument]]").skip(1) {
-        if block_string_value(block, "kind").as_deref() == Some(kind)
-            && let Some(arg) = block_string_value(block, "arg")
-        {
-            args.push(arg);
-        }
-    }
-
-    Ok(args)
+    Ok(LockedInstance::read(root, instance)?
+        .map(|lock| lock.arguments(kind))
+        .unwrap_or_default())
 }
 
 pub(super) fn fetch_locked_libraries(
@@ -205,11 +228,11 @@ pub(super) fn fetch_locked_libraries(
     cache_dir: &Path,
     side: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    let Some(lock) = locked_instance_block(root, instance)? else {
+    let Some(lock) = LockedInstance::read(root, instance)? else {
         return Ok(Vec::new());
     };
     let mut libraries = Vec::new();
-    for block in lock.split("[[library]]").skip(1) {
+    for block in lock.sections("[[library]]") {
         if let Some(library_side) = block_string_value(block, "side")
             && library_side != "common"
             && library_side != side
@@ -261,23 +284,23 @@ pub(super) fn fetch_locked_assets(
     cache_dir: &Path,
 ) -> Result<PathBuf, String> {
     let assets_dir = cache_dir.join("assets");
-    let Some(lock) = locked_instance_block(root, instance)? else {
+    let Some(lock) = LockedInstance::read(root, instance)? else {
         return Ok(assets_dir);
     };
-    if let Some(index_url) = block_string_value(&lock, "index_url") {
-        let id = block_string_value(&lock, "id").unwrap_or_else(|| "assets".to_string());
+    if let Some(index_url) = lock.value("index_url") {
+        let id = lock.value("id").unwrap_or_else(|| "assets".to_string());
         let index_path = fetch_to_cache(
             &index_url,
             &assets_dir.join("indexes"),
             &format!("{id}.json"),
         )?;
-        if let Some(expected) = block_string_value(&lock, "index_sha256") {
+        if let Some(expected) = lock.value("index_sha256") {
             verify_file_hash("locked asset index", &id, &index_path, &expected)?;
         }
     }
 
     let mut missing_assets = Vec::new();
-    for block in lock.split("[[asset]]").skip(1) {
+    for block in lock.sections("[[asset]]") {
         let block = block.find("\n[").map(|end| &block[..end]).unwrap_or(block);
         let Some(hash) = block_string_value(block, "hash") else {
             continue;

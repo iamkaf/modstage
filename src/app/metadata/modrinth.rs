@@ -1,4 +1,21 @@
 use super::*;
+use serde::Deserialize;
+use std::collections::HashMap;
+
+#[derive(Deserialize)]
+struct ModrinthVersionMetadata {
+    id: String,
+    version_number: String,
+    files: Vec<ModrinthFileMetadata>,
+}
+
+#[derive(Deserialize)]
+struct ModrinthFileMetadata {
+    filename: String,
+    url: String,
+    primary: Option<bool>,
+    hashes: Option<HashMap<String, String>>,
+}
 
 pub(in crate::app) struct ModrinthMod {
     pub(in crate::app) project: String,
@@ -40,7 +57,9 @@ pub(in crate::app) fn resolve_modrinth_mod(
     )?;
     let metadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
-    let version_metadata = select_modrinth_version(&metadata, source).ok_or_else(|| {
+    let versions: Vec<ModrinthVersionMetadata> = serde_json::from_str(&metadata)
+        .map_err(|error| format!("failed to parse Modrinth metadata: {error}"))?;
+    let version_metadata = select_modrinth_version(&versions, source).ok_or_else(|| {
         if let Some(version) = source.version {
             format!(
                 "Modrinth project `{}` did not include requested version `{version}`",
@@ -53,94 +72,57 @@ pub(in crate::app) fn resolve_modrinth_mod(
             )
         }
     })?;
-    let file_metadata = primary_modrinth_file(&metadata)
-        .filter(|_| source.version.is_none())
-        .or_else(|| primary_modrinth_file(version_metadata))
-        .ok_or_else(|| {
-            format!(
-                "Modrinth project `{}` did not include a primary file",
-                source.project
-            )
-        })?;
-    let filename = json_string(file_metadata, "filename").ok_or_else(|| {
+    let file_metadata = primary_modrinth_file(version_metadata).ok_or_else(|| {
         format!(
-            "Modrinth project `{}` primary file had no filename",
+            "Modrinth project `{}` did not include a primary file",
             source.project
         )
     })?;
-    let url = json_string(file_metadata, "url").ok_or_else(|| {
-        format!(
-            "Modrinth project `{}` primary file had no URL",
-            source.project
-        )
-    })?;
+    let filename = file_metadata.filename.clone();
+    let url = file_metadata.url.clone();
     let path = fetch_to_cache(&url, &cache_dir, &filename)?;
     let bytes = fs::read(&path)
         .map_err(|error| format!("failed to read Modrinth file {}: {error}", path.display()))?;
+    let hashes = file_metadata.hashes.as_ref();
 
     Ok(ModrinthMod {
         project: source.project.to_string(),
-        version_id: json_string(version_metadata, "id").ok_or_else(|| {
-            format!(
-                "Modrinth project `{}` metadata had no version id",
-                source.project
-            )
-        })?,
-        version_number: json_string(version_metadata, "version_number").ok_or_else(|| {
-            format!(
-                "Modrinth project `{}` metadata had no version number",
-                source.project
-            )
-        })?,
+        version_id: version_metadata.id.clone(),
+        version_number: version_metadata.version_number.clone(),
         filename,
         url,
         path,
-        sha1: json_object_string(file_metadata, "hashes", "sha1").unwrap_or_default(),
-        sha512: json_object_string(file_metadata, "hashes", "sha512").unwrap_or_default(),
+        sha1: hashes
+            .and_then(|hashes| hashes.get("sha1"))
+            .cloned()
+            .unwrap_or_default(),
+        sha512: hashes
+            .and_then(|hashes| hashes.get("sha512"))
+            .cloned()
+            .unwrap_or_default(),
         sha256: sha256_hex(&bytes),
     })
 }
 
-pub(in crate::app) fn select_modrinth_version<'a>(
-    metadata: &'a str,
+fn select_modrinth_version<'a>(
+    versions: &'a [ModrinthVersionMetadata],
     source: &ModrinthSource<'_>,
-) -> Option<&'a str> {
+) -> Option<&'a ModrinthVersionMetadata> {
     let Some(version) = source.version else {
-        return Some(metadata);
+        return versions.first();
     };
 
-    for block in modrinth_version_blocks(metadata) {
-        if json_string(block, "version_number").as_deref() == Some(version)
-            || json_string(block, "id").as_deref() == Some(version)
-        {
-            return Some(block);
-        }
-    }
-
-    None
+    versions
+        .iter()
+        .find(|candidate| candidate.version_number == version || candidate.id == version)
 }
 
-pub(in crate::app) fn modrinth_version_blocks(metadata: &str) -> Vec<&str> {
-    let mut blocks = Vec::new();
-    let mut rest = metadata;
-
-    while let Some(version_position) = rest.find("\"version_number\"") {
-        let before_version = &rest[..version_position];
-        let Some(block_start) = before_version.rfind('{') else {
-            break;
-        };
-        let block = &rest[block_start..];
-        blocks.push(block);
-        rest = &rest[version_position + "\"version_number\"".len()..];
-    }
-
-    blocks
-}
-
-pub(in crate::app) fn primary_modrinth_file(metadata: &str) -> Option<&str> {
-    let primary = metadata.find("\"primary\"")?;
-    let file_start = metadata[..primary].rfind('{')?;
-    Some(&metadata[file_start..])
+fn primary_modrinth_file(version: &ModrinthVersionMetadata) -> Option<&ModrinthFileMetadata> {
+    version
+        .files
+        .iter()
+        .find(|file| file.primary.unwrap_or(false))
+        .or_else(|| version.files.first())
 }
 
 pub(in crate::app) fn modrinth_source(source: &str) -> Option<ModrinthSource<'_>> {

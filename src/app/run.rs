@@ -11,15 +11,8 @@ pub(super) fn run_instance(
     }
     let options = RunOptions::parse(args)?;
 
-    let config_path = config_path(explicit_config)?;
-    let contents = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    let config = Config::parse(&contents)?;
-    let instance = config
-        .instances
-        .iter()
-        .find(|instance| instance.name == selected)
-        .ok_or_else(|| format!("unknown instance `{selected}`"))?;
+    let project = ProjectContext::load(explicit_config)?;
+    let instance = project.instance(selected)?;
 
     if !instance.sides.iter().any(|configured| configured == side) {
         return Err(format!(
@@ -27,8 +20,7 @@ pub(super) fn run_instance(
         ));
     }
 
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let lock_path = root.join("modstage.lock");
+    let lock_path = project.lock_path();
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
@@ -38,17 +30,17 @@ pub(super) fn run_instance(
         ));
     }
     if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
-        resolve_instance(Some(config_path.clone()), Some(selected))?;
+        resolve_instance(Some(project.config_path.clone()), Some(selected))?;
     }
-    let dirs = StateDirs::for_project(&config.project_name, root)?;
-    let mod_cache = dirs.cache.join("downloads").join("mods");
+    let mod_cache = project.dirs.cache.join("downloads").join("mods");
     if options.locked {
-        verify_locked_mod_hashes(root, instance, &mod_cache)?;
+        verify_locked_mod_hashes(&project.root, instance, &mod_cache)?;
     }
-    let game_dir = dirs
+    let game_dir = project
+        .dirs
         .data
         .join("instances")
-        .join(&dirs.project_id)
+        .join(&project.dirs.project_id)
         .join(&instance.name)
         .join(side)
         .join("game");
@@ -56,8 +48,8 @@ pub(super) fn run_instance(
 
     fs::create_dir_all(&mods_dir)
         .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
-    reconcile_mods(root, instance, &mods_dir, &mod_cache)?;
-    apply_fixtures(root, side, instance, &game_dir)?;
+    reconcile_mods(&project.root, instance, &mods_dir, &mod_cache)?;
+    apply_fixtures(&project.root, side, instance, &game_dir)?;
 
     if side == "server" {
         fs::write(game_dir.join("eula.txt"), "eula=true\n")
@@ -65,31 +57,27 @@ pub(super) fn run_instance(
     }
     write_side_launcher_metadata(instance, side, &game_dir)?;
 
-    let run_dir = dirs.data.join("runs").join(&dirs.project_id).join(run_id());
+    let run_dir = project
+        .dirs
+        .data
+        .join("runs")
+        .join(&project.dirs.project_id)
+        .join(run_id());
     fs::create_dir_all(&run_dir)
         .map_err(|error| format!("failed to create {}: {error}", run_dir.display()))?;
-    fs::write(
-        run_dir.join("run.toml"),
-        format!(
-            "instance = \"{}\"\nside = \"{}\"\nstatus = \"staged\"\ngame_dir = \"{}\"\n",
-            instance.name,
-            side,
-            game_dir.display()
-        ),
-    )
-    .map_err(|error| format!("failed to write run report: {error}"))?;
+    RunReport::new(instance, side, &game_dir, &run_dir).write_staged()?;
 
     let artifact_key = if side == "server" {
         "server_url"
     } else {
         "client_url"
     };
-    if let Some(artifact_url) = locked_minecraft_url(root, &instance.name, artifact_key)? {
+    if let Some(artifact_url) = locked_minecraft_url(&project.root, &instance.name, artifact_key)? {
         let result = launch_minecraft_instance(
-            &config,
+            &project.config,
             instance,
             side,
-            root,
+            &project.root,
             &game_dir,
             &run_dir,
             &artifact_url,
@@ -192,12 +180,4 @@ pub(super) fn run_id() -> String {
         .unwrap_or(0);
 
     format!("{millis}")
-}
-
-pub(super) fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
-    match explicit_config {
-        Some(path) => Ok(path),
-        None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?
-            .ok_or_else(|| "no modstage.toml found; run `modstage init`".to_string()),
-    }
 }

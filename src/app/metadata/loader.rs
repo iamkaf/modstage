@@ -1,4 +1,53 @@
 use super::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct FabricMetadata {
+    loader: FabricComponent,
+    intermediary: FabricComponent,
+    #[serde(rename = "launcherMeta")]
+    launcher_meta: FabricLauncherMeta,
+}
+
+#[derive(Deserialize)]
+struct FabricComponent {
+    maven: String,
+    version: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FabricLauncherMeta {
+    libraries: Option<FabricLibraries>,
+    #[serde(rename = "mainClass")]
+    main_class: FabricMainClass,
+}
+
+#[derive(Deserialize)]
+struct FabricLibraries {
+    common: Option<Vec<FabricLibrary>>,
+    client: Option<Vec<FabricLibrary>>,
+    server: Option<Vec<FabricLibrary>>,
+}
+
+#[derive(Deserialize)]
+struct FabricLibrary {
+    name: String,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct FabricMainClass {
+    client: String,
+    server: String,
+}
+
+#[derive(Deserialize)]
+struct InstallerLoaderMetadata {
+    version: Option<String>,
+    installer_maven: String,
+    client_main_class: String,
+    server_main_class: String,
+}
 
 pub(in crate::app) struct LoaderMetadata {
     pub(in crate::app) kind: String,
@@ -37,31 +86,22 @@ pub(in crate::app) fn resolve_fabric_loader_metadata(
 ) -> Result<Option<LoaderMetadata>, String> {
     let url = fabric_meta_url(instance);
     let metadata = loader_metadata_text(config, root, "fabric", &url, instance)?;
+    let parsed = parse_fabric_metadata(&metadata)?;
 
     Ok(Some(LoaderMetadata {
         kind: "fabric".to_string(),
-        version: json_string(&metadata, "version").unwrap_or_else(|| {
+        version: parsed.loader.version.clone().unwrap_or_else(|| {
             instance
                 .loader_version
                 .clone()
                 .unwrap_or_else(|| "latest".to_string())
         }),
-        loader_maven: Some(
-            json_object_string(&metadata, "loader", "maven").ok_or_else(|| {
-                "Fabric metadata did not include loader maven coordinate".to_string()
-            })?,
-        ),
-        intermediary_maven: Some(
-            json_object_string(&metadata, "intermediary", "maven").ok_or_else(|| {
-                "Fabric metadata did not include intermediary maven coordinate".to_string()
-            })?,
-        ),
+        loader_maven: Some(parsed.loader.maven),
+        intermediary_maven: Some(parsed.intermediary.maven),
         installer_maven: None,
-        libraries: fabric_launcher_libraries(&metadata),
-        client_main_class: json_object_string(&metadata, "mainClass", "client")
-            .ok_or_else(|| "Fabric metadata did not include client main class".to_string())?,
-        server_main_class: json_object_string(&metadata, "mainClass", "server")
-            .ok_or_else(|| "Fabric metadata did not include server main class".to_string())?,
+        libraries: fabric_launcher_libraries(parsed.launcher_meta.libraries),
+        client_main_class: parsed.launcher_meta.main_class.client,
+        server_main_class: parsed.launcher_meta.main_class.server,
     }))
 }
 
@@ -81,10 +121,12 @@ pub(in crate::app) fn resolve_installer_loader_metadata(
 ) -> Result<Option<LoaderMetadata>, String> {
     if let Some(url) = installer_loader_meta_url(loader) {
         let metadata = loader_metadata_text(config, root, loader, &url, instance)?;
+        let parsed: InstallerLoaderMetadata = serde_json::from_str(&metadata)
+            .map_err(|error| format!("failed to parse {loader} metadata: {error}"))?;
 
         return Ok(Some(LoaderMetadata {
             kind: loader.to_string(),
-            version: json_string(&metadata, "version").unwrap_or_else(|| {
+            version: parsed.version.unwrap_or_else(|| {
                 instance
                     .loader_version
                     .clone()
@@ -92,14 +134,10 @@ pub(in crate::app) fn resolve_installer_loader_metadata(
             }),
             loader_maven: None,
             intermediary_maven: None,
-            installer_maven: Some(json_string(&metadata, "installer_maven").ok_or_else(|| {
-                format!("{loader} metadata did not include installer maven coordinate")
-            })?),
+            installer_maven: Some(parsed.installer_maven),
             libraries: Vec::new(),
-            client_main_class: json_string(&metadata, "client_main_class")
-                .ok_or_else(|| format!("{loader} metadata did not include client main class"))?,
-            server_main_class: json_string(&metadata, "server_main_class")
-                .ok_or_else(|| format!("{loader} metadata did not include server main class"))?,
+            client_main_class: parsed.client_main_class,
+            server_main_class: parsed.server_main_class,
         }));
     }
 
@@ -142,58 +180,46 @@ pub(in crate::app) fn fabric_meta_url(instance: &Instance) -> String {
     }
 }
 
-pub(in crate::app) fn fabric_launcher_libraries(metadata: &str) -> Vec<LoaderLibrary> {
+fn fabric_launcher_libraries(parsed: Option<FabricLibraries>) -> Vec<LoaderLibrary> {
     let mut libraries = Vec::new();
 
-    for side in ["common", "client", "server"] {
-        let Some(section) = launcher_libraries_section(metadata, side) else {
-            continue;
-        };
+    let Some(parsed) = parsed else {
+        return Vec::new();
+    };
 
-        for block in json_object_blocks(section) {
-            let Some(name) = json_string(block, "name") else {
-                continue;
-            };
-            let Some(url) = json_string(block, "url") else {
-                continue;
-            };
-            libraries.push(LoaderLibrary {
-                side: side.to_string(),
-                name,
-                url,
-            });
-        }
-    }
+    append_fabric_libraries(&mut libraries, "common", parsed.common);
+    append_fabric_libraries(&mut libraries, "client", parsed.client);
+    append_fabric_libraries(&mut libraries, "server", parsed.server);
 
     libraries
 }
 
-pub(in crate::app) fn launcher_libraries_section<'a>(
-    metadata: &'a str,
-    side: &str,
-) -> Option<&'a str> {
-    let libraries_start = metadata.find("\"libraries\"")?;
-    let libraries = &metadata[libraries_start..];
-    let side_start = libraries.find(&format!("\"{side}\""))?;
-    let side_text = &libraries[side_start..];
-    let array_start = side_text.find('[')?;
-    let array = &side_text[array_start + 1..];
-    let mut depth = 1_i32;
-
-    for (index, character) in array.char_indices() {
-        match character {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&array[..index]);
-                }
-            }
-            _ => {}
+fn parse_fabric_metadata(metadata: &str) -> Result<FabricMetadata, String> {
+    match serde_json::from_str::<FabricMetadata>(metadata) {
+        Ok(metadata) => Ok(metadata),
+        Err(object_error) => {
+            let mut versions: Vec<FabricMetadata> = serde_json::from_str(metadata)
+                .map_err(|_| format!("failed to parse Fabric metadata: {object_error}"))?;
+            versions
+                .drain(..)
+                .next()
+                .ok_or_else(|| "Fabric metadata did not include any versions".to_string())
         }
     }
+}
 
-    None
+fn append_fabric_libraries(
+    libraries: &mut Vec<LoaderLibrary>,
+    side: &str,
+    side_libraries: Option<Vec<FabricLibrary>>,
+) {
+    for library in side_libraries.unwrap_or_default() {
+        libraries.push(LoaderLibrary {
+            side: side.to_string(),
+            name: library.name,
+            url: library.url,
+        });
+    }
 }
 
 pub(in crate::app) fn installer_loader_meta_url(loader: &str) -> Option<String> {

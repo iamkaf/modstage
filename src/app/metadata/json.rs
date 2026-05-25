@@ -41,15 +41,6 @@ pub(in crate::app) fn json_string(text: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-pub(in crate::app) fn json_object_string(
-    text: &str,
-    object_key: &str,
-    value_key: &str,
-) -> Option<String> {
-    let object_start = text.find(&format!("\"{object_key}\""))?;
-    json_string(&text[object_start..], value_key)
-}
-
 pub(in crate::app) fn json_string_array(text: &str, key: &str) -> Option<Vec<String>> {
     let key_start = text.find(&format!("\"{key}\""))?;
     let after_key = &text[key_start + key.len() + 2..];
@@ -76,16 +67,4 @@ pub(in crate::app) fn json_string_array(text: &str, key: &str) -> Option<Vec<Str
             return None;
         }
     }
-}
-
-pub(in crate::app) fn json_u32(text: &str, key: &str) -> Option<u32> {
-    let key_start = text.find(&format!("\"{key}\""))?;
-    let after_key = &text[key_start + key.len() + 2..];
-    let colon = after_key.find(':')?;
-    let rest = after_key[colon + 1..].trim_start();
-    let end = rest
-        .find(|character: char| !character.is_ascii_digit())
-        .unwrap_or(rest.len());
-
-    rest[..end].parse().ok()
 }

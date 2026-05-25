@@ -7,7 +7,7 @@ static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .expect("HTTP client configuration should be valid")
 });
 
-pub(in crate::app) fn fetch_to_cache(
+pub(super) fn fetch_to_cache(
     url: &str,
     cache_dir: &Path,
     file_name: &str,
@@ -55,4 +55,65 @@ pub(in crate::app) fn fetch_to_cache(
     }
 
     Err(format!("unsupported URL `{url}`"))
+}
+
+pub(super) struct ResolvedMavenArtifact {
+    pub(super) repository: String,
+    pub(super) path: PathBuf,
+    pub(super) url: Option<String>,
+}
+
+pub(super) fn resolve_maven_artifact(
+    repositories: &[(String, String)],
+    coordinates: &MavenCoordinates<'_>,
+    cache_dir: &Path,
+) -> Result<Option<ResolvedMavenArtifact>, String> {
+    for (name, url) in repositories {
+        if url == "mavenLocal" {
+            if let Some(path) = maven_local_artifact(coordinates) {
+                return Ok(Some(ResolvedMavenArtifact {
+                    repository: name.clone(),
+                    path,
+                    url: None,
+                }));
+            }
+        } else if let Some(root) = url.strip_prefix("file://") {
+            if let Some(path) = maven_artifact_under(PathBuf::from(root), coordinates) {
+                return Ok(Some(ResolvedMavenArtifact {
+                    repository: name.clone(),
+                    path,
+                    url: None,
+                }));
+            }
+        } else if url.starts_with("https://") || url.starts_with("http://") {
+            let artifact_url = maven_artifact_url(url, coordinates);
+            if let Ok(path) = fetch_to_cache(
+                &artifact_url,
+                &cache_dir.join(name),
+                &coordinates.file_name(),
+            ) {
+                return Ok(Some(ResolvedMavenArtifact {
+                    repository: name.clone(),
+                    path,
+                    url: Some(artifact_url),
+                }));
+            }
+        }
+    }
+
+    Ok(
+        maven_local_artifact(coordinates).map(|path| ResolvedMavenArtifact {
+            repository: "mavenLocal".to_string(),
+            path,
+            url: None,
+        }),
+    )
+}
+
+pub(super) fn maven_artifact_url(repository: &str, coordinates: &MavenCoordinates<'_>) -> String {
+    format!(
+        "{}/{}",
+        repository.trim_end_matches('/'),
+        coordinates.artifact_relative_path()
+    )
 }

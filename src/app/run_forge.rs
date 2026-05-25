@@ -5,6 +5,65 @@ pub(super) struct ForgeServerLaunch {
     pub(super) args: Vec<String>,
 }
 
+pub(super) struct InstallerRuntime<'a> {
+    config: &'a Config,
+    instance: &'a Instance,
+    root: &'a Path,
+    dirs: &'a StateDirs,
+}
+
+impl<'a> InstallerRuntime<'a> {
+    pub(super) fn new(
+        config: &'a Config,
+        instance: &'a Instance,
+        root: &'a Path,
+        dirs: &'a StateDirs,
+    ) -> Self {
+        Self {
+            config,
+            instance,
+            root,
+            dirs,
+        }
+    }
+
+    pub(super) fn prepare_server_launch(
+        &self,
+        game_dir: &Path,
+        java: &Path,
+    ) -> Result<Option<ForgeServerLaunch>, String> {
+        prepare_forge_server_launch(
+            self.config,
+            self.instance,
+            self.root,
+            self.dirs,
+            game_dir,
+            java,
+        )
+    }
+
+    pub(super) fn prepare_client_artifact(
+        &self,
+        game_dir: &Path,
+        java: &Path,
+        minecraft_artifact: &Path,
+    ) -> Result<Option<PathBuf>, String> {
+        prepare_forge_client_artifact(
+            self.config,
+            self.instance,
+            self.root,
+            self.dirs,
+            game_dir,
+            java,
+            minecraft_artifact,
+        )
+    }
+
+    pub(super) fn neoforge_client_runtime(&self) -> Result<Option<PathBuf>, String> {
+        neoforge_client_runtime(self.config, self.instance, self.dirs)
+    }
+}
+
 pub(super) fn prepare_forge_client_artifact(
     config: &Config,
     instance: &Instance,

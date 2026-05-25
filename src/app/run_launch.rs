@@ -18,17 +18,16 @@ pub(super) fn launch_minecraft_instance(
     let main_class = locked_main_class(root, &instance.name, side)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
     let java = selected_java(root, instance, options)?;
+    let installer_runtime = InstallerRuntime::new(config, instance, root, &dirs);
     let mut command = Command::new(&java);
-    let mut launch_args = Vec::new();
+    let mut launch_plan = LaunchPlanBuilder::new();
     let mut launch_artifact = artifact.clone();
     if side == "server"
-        && let Some(forge_launch) =
-            prepare_forge_server_launch(config, instance, root, &dirs, game_dir, &java)?
+        && let Some(forge_launch) = installer_runtime.prepare_server_launch(game_dir, &java)?
     {
         launch_artifact = forge_launch.artifact;
         for arg in forge_launch.args {
-            command.arg(&arg);
-            launch_args.push(arg);
+            launch_plan.arg(&mut command, arg);
         }
     } else if let Some(main_class) = main_class {
         if side == "server" {
@@ -36,25 +35,17 @@ pub(super) fn launch_minecraft_instance(
         }
         for arg in locked_arguments(root, &instance.name, "jvm")? {
             let arg = expand_launch_argument(&arg, &cache_dir, game_dir);
-            command.arg(&arg);
-            launch_args.push(arg);
+            launch_plan.arg(&mut command, arg);
         }
         let mut classpath = vec![launch_artifact.clone()];
         if side == "client"
-            && let Some(patched) = prepare_forge_client_artifact(
-                config,
-                instance,
-                root,
-                &dirs,
-                game_dir,
-                &java,
-                &launch_artifact,
-            )?
+            && let Some(patched) =
+                installer_runtime.prepare_client_artifact(game_dir, &java, &launch_artifact)?
         {
             classpath.push(patched);
         }
         if side == "client"
-            && let Some(runtime) = neoforge_client_runtime(config, instance, &dirs)?
+            && let Some(runtime) = installer_runtime.neoforge_client_runtime()?
         {
             classpath.push(runtime);
         }
@@ -65,10 +56,8 @@ pub(super) fn launch_minecraft_instance(
             side,
         )?);
         let classpath = join_classpath(&classpath);
-        command.arg("-cp").arg(&classpath).arg(&main_class);
-        launch_args.push("-cp".to_string());
-        launch_args.push(classpath);
-        launch_args.push(main_class);
+        launch_plan.arg_pair(&mut command, "-cp", classpath);
+        launch_plan.arg(&mut command, main_class);
         let game_args = launch_game_arguments(
             instance,
             side,
@@ -79,75 +68,70 @@ pub(super) fn launch_minecraft_instance(
         .collect::<Vec<_>>();
         let has_nogui = game_args.iter().any(|arg| arg == "nogui");
         for arg in game_args {
-            command.arg(&arg);
-            launch_args.push(arg);
+            launch_plan.arg(&mut command, arg);
         }
         if side == "client" {
             append_client_argument(
                 &mut command,
-                &mut launch_args,
+                &mut launch_plan,
                 "--version",
                 &instance.minecraft,
             );
-            append_client_argument(&mut command, &mut launch_args, "--accessToken", "0");
-            append_client_argument(&mut command, &mut launch_args, "--username", "Player");
+            append_client_argument(&mut command, &mut launch_plan, "--accessToken", "0");
+            append_client_argument(&mut command, &mut launch_plan, "--username", "Player");
             append_client_argument(
                 &mut command,
-                &mut launch_args,
+                &mut launch_plan,
                 "--uuid",
                 "00000000000000000000000000000000",
             );
-            append_client_argument(&mut command, &mut launch_args, "--userType", "legacy");
+            append_client_argument(&mut command, &mut launch_plan, "--userType", "legacy");
             append_client_argument(
                 &mut command,
-                &mut launch_args,
+                &mut launch_plan,
                 "--gameDir",
                 &game_dir.display().to_string(),
             );
         }
         if side == "server" && !has_nogui {
-            command.arg("nogui");
-            launch_args.push("nogui".to_string());
+            launch_plan.arg(&mut command, "nogui");
         }
         if side == "client"
             && let Some(asset_index) = locked_value(root, &instance.name, "id")?
         {
-            command.arg("--assetIndex").arg(&asset_index);
-            launch_args.push("--assetIndex".to_string());
-            launch_args.push(asset_index);
+            launch_plan.arg_pair(&mut command, "--assetIndex", asset_index);
         }
         if side == "client" && locked_value(root, &instance.name, "index_url")?.is_some() {
             let assets_dir = fetch_locked_assets(root, &instance.name, &cache_dir)?;
-            command.arg("--assetsDir").arg(&assets_dir);
-            launch_args.push("--assetsDir".to_string());
-            launch_args.push(assets_dir.display().to_string());
+            launch_plan.arg_pair(
+                &mut command,
+                "--assetsDir",
+                assets_dir.display().to_string(),
+            );
         }
     } else if side == "server" {
-        command.arg("-jar").arg(&artifact);
-        command.arg("nogui");
-        launch_args.push("-jar".to_string());
-        launch_args.push(artifact.display().to_string());
-        launch_args.push("nogui".to_string());
+        launch_plan.arg_pair(&mut command, "-jar", artifact.display().to_string());
+        launch_plan.arg(&mut command, "nogui");
     } else {
-        command.arg("-jar").arg(&artifact);
-        launch_args.push("-jar".to_string());
-        launch_args.push(artifact.display().to_string());
+        launch_plan.arg_pair(&mut command, "-jar", artifact.display().to_string());
     }
     if let Some(scenario) = &scenario {
-        command.arg("--modstageScenario").arg(scenario);
         command.env("MODSTAGE_RUN_DIR", run_dir);
         command.env("MODSTAGE_ARTIFACT_DIR", run_dir.join("artifacts"));
-        launch_args.push("--modstageScenario".to_string());
-        launch_args.push(scenario.display().to_string());
+        launch_plan.arg_pair(
+            &mut command,
+            "--modstageScenario",
+            scenario.display().to_string(),
+        );
     }
-    let launch_plan = write_launch_plan(
+    let launch_plan_path = write_launch_plan(
         instance,
         side,
         &java,
         &launch_artifact,
         scenario.as_deref(),
         run_dir,
-        &launch_args,
+        launch_plan.args(),
     )?;
     command.current_dir(game_dir);
     let timeout = options.timeout_duration()?;
@@ -177,47 +161,26 @@ pub(super) fn launch_minecraft_instance(
     let artifacts = collect_run_artifacts(game_dir, run_dir, run_started)?;
     let failure_class = classify_failure(process_success, timed_out, &artifacts)?;
     let success = process_success && failure_class == "none";
-    let report_path = run_dir.join("run.toml");
-    fs::write(
-        &report_path,
-        format!(
-            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\nlaunch_plan = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
-            instance.name,
-            side,
-            if timed_out {
-                "timed_out"
-            } else if success {
-                "passed"
-            } else {
-                "failed"
-            },
-            game_dir.display(),
-            java.display(),
-            artifact.display(),
-            scenario
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-            launch_plan.display(),
-            exit_code.unwrap_or(-1),
+    let status = if timed_out {
+        "timed_out"
+    } else if success {
+        "passed"
+    } else {
+        "failed"
+    };
+    let report_path =
+        RunReport::new(instance, side, game_dir, run_dir).finalize(FinalRunReport {
+            status,
+            java: &java,
+            artifact: &artifact,
+            scenario: scenario.as_deref(),
+            launch_plan: &launch_plan_path,
+            exit_code,
             timed_out,
-            options.timeout.as_deref().unwrap_or(""),
+            timeout: options.timeout.as_deref(),
             failure_class,
-            run_dir.join("stdout.log").display(),
-            run_dir.join("stderr.log").display(),
-            artifacts
-                .minecraft_log
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-            artifacts
-                .crash_report
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default()
-        ),
-    )
-    .map_err(|error| format!("failed to write run report: {error}"))?;
+            artifacts: &artifacts,
+        })?;
     print_run_summary(
         instance,
         side,
@@ -277,16 +240,14 @@ fn expand_launch_argument(arg: &str, cache_dir: &Path, game_dir: &Path) -> Strin
 
 fn append_client_argument(
     command: &mut Command,
-    launch_args: &mut Vec<String>,
+    launch_plan: &mut LaunchPlanBuilder,
     key: &str,
     value: &str,
 ) {
-    if launch_args.iter().any(|arg| arg == key) {
+    if launch_plan.contains(key) {
         return;
     }
-    command.arg(key).arg(value);
-    launch_args.push(key.to_string());
-    launch_args.push(value.to_string());
+    launch_plan.arg_pair(command, key, value);
 }
 
 pub(super) fn print_run_summary(

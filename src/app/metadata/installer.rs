@@ -1,4 +1,36 @@
 use super::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct InstallerVersionJson {
+    #[serde(rename = "mainClass")]
+    main_class: Option<String>,
+    arguments: Option<InstallerArguments>,
+    libraries: Option<Vec<InstallerLibraryEntry>>,
+}
+
+#[derive(Deserialize)]
+struct InstallerArguments {
+    jvm: Option<Vec<String>>,
+    game: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct InstallerLibraryEntry {
+    name: String,
+    downloads: Option<InstallerLibraryDownloads>,
+}
+
+#[derive(Deserialize)]
+struct InstallerLibraryDownloads {
+    artifact: Option<InstallerLibraryArtifact>,
+}
+
+#[derive(Deserialize)]
+struct InstallerLibraryArtifact {
+    path: String,
+    url: String,
+}
 
 pub(in crate::app) struct InstallerProfileLibrary {
     pub(in crate::app) name: String,
@@ -27,40 +59,46 @@ pub(in crate::app) fn resolve_installer_profile(
             libraries: Vec::new(),
         });
     };
-    let main_class = json_string(&version_json, "mainClass");
-    let jvm_args = profile_arguments(&version_json, "jvm");
-    let game_args = profile_arguments(&version_json, "game");
+    let parsed: InstallerVersionJson = serde_json::from_str(&version_json)
+        .map_err(|error| format!("failed to parse installer version metadata: {error}"))?;
+    let main_class = parsed.main_class;
+    let jvm_args = parsed
+        .arguments
+        .as_ref()
+        .and_then(|arguments| arguments.jvm.clone())
+        .unwrap_or_default();
+    let game_args = parsed
+        .arguments
+        .as_ref()
+        .and_then(|arguments| arguments.game.clone())
+        .unwrap_or_default();
     let mut libraries = Vec::new();
 
-    for block in minecraft_library_blocks(&version_json) {
-        let Some(name) = json_string(block, "name") else {
+    for library in parsed.libraries.as_deref().unwrap_or_default() {
+        let Some(artifact) = library
+            .downloads
+            .as_ref()
+            .and_then(|downloads| downloads.artifact.as_ref())
+        else {
             continue;
         };
-        let Some(artifact) = json_object_after(block, "artifact") else {
-            continue;
-        };
-        let Some(path) = json_string(artifact, "path") else {
-            continue;
-        };
-        let Some(url) = json_string(artifact, "url") else {
-            continue;
-        };
-        if url.is_empty() {
+        if artifact.url.is_empty() {
             continue;
         }
-        let file_name = path
+        let file_name = artifact
+            .path
             .rsplit('/')
             .next()
             .filter(|name| !name.is_empty())
             .unwrap_or("library.jar");
-        let library_path = fetch_to_cache(&url, cache_dir, file_name)?;
+        let library_path = fetch_to_cache(&artifact.url, cache_dir, file_name)?;
         let bytes = fs::read(&library_path)
             .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
 
         libraries.push(InstallerProfileLibrary {
-            name,
-            path,
-            url,
+            name: library.name.clone(),
+            path: artifact.path.clone(),
+            url: artifact.url.clone(),
             sha256: sha256_hex(&bytes),
         });
     }
@@ -71,13 +109,6 @@ pub(in crate::app) fn resolve_installer_profile(
         game_args,
         libraries,
     })
-}
-
-pub(in crate::app) fn profile_arguments(version_json: &str, kind: &str) -> Vec<String> {
-    let Some(arguments) = json_object_after(version_json, "arguments") else {
-        return Vec::new();
-    };
-    json_string_array(arguments, kind).unwrap_or_default()
 }
 
 pub(in crate::app) fn jar_entry_text(
