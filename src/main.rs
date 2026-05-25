@@ -295,6 +295,21 @@ sides = [{}]\n",
                 path.display(),
                 sha256_hex(&bytes)
             ));
+        } else if let Some(coordinates) = MavenCoordinates::parse(source) {
+            let Some(path) = maven_local_artifact(&coordinates) else {
+                continue;
+            };
+            let path = path
+                .canonicalize()
+                .map_err(|error| format!("failed to resolve Maven artifact {}: {error}", path.display()))?;
+            let bytes = fs::read(&path)
+                .map_err(|error| format!("failed to read Maven artifact {}: {error}", path.display()))?;
+            lock.push_str(&format!(
+                "\n[[mod]]\nsource = \"{}\"\nrepository = \"mavenLocal\"\npath = \"{}\"\nsha256 = \"{}\"\n",
+                source,
+                path.display(),
+                sha256_hex(&bytes)
+            ));
         }
     }
 
@@ -516,6 +531,58 @@ fn local_mod_path(root: &Path, source: &str) -> Option<PathBuf> {
     } else {
         root.join(path)
     })
+}
+
+struct MavenCoordinates<'a> {
+    group: &'a str,
+    artifact: &'a str,
+    version: &'a str,
+}
+
+impl<'a> MavenCoordinates<'a> {
+    fn parse(source: &'a str) -> Option<Self> {
+        let source = source.strip_prefix("maven:")?;
+        let mut parts = source.split(':');
+        let group = parts.next()?;
+        let artifact = parts.next()?;
+        let version = parts.next()?;
+
+        if parts.next().is_some() {
+            return None;
+        }
+
+        Some(Self {
+            group,
+            artifact,
+            version,
+        })
+    }
+}
+
+fn maven_local_artifact(coordinates: &MavenCoordinates<'_>) -> Option<PathBuf> {
+    let root = maven_local_root()?;
+    let mut path = root;
+
+    for segment in coordinates.group.split('.') {
+        path.push(segment);
+    }
+
+    path.push(coordinates.artifact);
+    path.push(coordinates.version);
+    path.push(format!(
+        "{}-{}.jar",
+        coordinates.artifact, coordinates.version
+    ));
+
+    path.is_file().then_some(path)
+}
+
+fn maven_local_root() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("MODSTAGE_MAVEN_LOCAL") {
+        return Some(PathBuf::from(path));
+    }
+
+    Some(home_dir().ok()?.join(".m2").join("repository"))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
