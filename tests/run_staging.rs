@@ -1774,6 +1774,148 @@ sides = ["client"]
 
 #[test]
 #[cfg(unix)]
+fn locked_client_run_restores_assets_from_the_lockfile_before_launch() {
+    let project = temp_dir("run-locked-assets-project");
+    let metadata = temp_dir("run-locked-assets-metadata");
+    let data_home = temp_dir("run-locked-assets-data");
+    let cache_home = temp_dir("run-locked-assets-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    let asset = metadata.join("asset.ogg");
+    let asset_hash = "07073e89283a7b4c254e22b82c08a83738c6a1f0";
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&asset, b"asset").expect("failed to write asset object");
+    let asset_index = metadata.join("assets-26.json");
+    fs::write(
+        &asset_index,
+        format!(
+            r#"{{
+  "objects": {{
+    "minecraft/sounds/example.ogg": {{
+      "hash": "{asset_hash}",
+      "size": 5,
+      "url": "file://{}"
+    }}
+  }}
+}}"#,
+            asset.display()
+        ),
+    )
+    .expect("failed to write asset index");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "mainClass": "net.minecraft.client.main.Main",
+  "assetIndex": {{
+    "id": "26",
+    "url": "file://{}"
+  }},
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            asset_index.display(),
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java-locked-assets");
+    fs::write(
+        &fake_java,
+        format!(
+            "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/07/{asset_hash}\" || exit 13\nprintf 'assets restored\\n'\n"
+        ),
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-locked-assets"
+
+[[instance]]
+name = "locked-assets-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "locked-assets-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    fs::remove_dir_all(cache_home.join("modstage")).expect("failed to clear redownloadable cache");
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "client",
+            "locked-assets-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        run.status.success(),
+        "locked client run should restore assets before launching Java\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("assets restored"),
+        "fake Java should confirm the restored asset layout"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_fabric_client_uses_loader_main_class_and_libraries() {
     let project = temp_dir("run-fabric-client-project");
     let metadata = temp_dir("run-fabric-client-metadata");

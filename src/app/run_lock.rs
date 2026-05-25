@@ -171,6 +171,58 @@ pub(super) fn verify_locked_library_hash(
     Ok(())
 }
 
+pub(super) fn fetch_locked_assets(root: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
+    let assets_dir = cache_dir.join("assets");
+    let lock_path = root.join("modstage.lock");
+    if !lock_path.is_file() {
+        return Ok(assets_dir);
+    }
+
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    if let Some(index_url) = block_string_value(&lock, "index_url") {
+        let id = block_string_value(&lock, "id").unwrap_or_else(|| "assets".to_string());
+        let index_path = fetch_to_cache(&index_url, &assets_dir.join("indexes"), &format!("{id}.json"))?;
+        if let Some(expected) = block_string_value(&lock, "index_sha256") {
+            verify_file_hash("locked asset index", &id, &index_path, &expected)?;
+        }
+    }
+
+    for block in lock.split("[[asset]]").skip(1) {
+        let Some(hash) = block_string_value(block, "hash") else {
+            continue;
+        };
+        let Some(url) = block_string_value(block, "url") else {
+            continue;
+        };
+        let name = block_string_value(block, "name").unwrap_or_else(|| hash.clone());
+        let object_path = fetch_to_cache(&url, &asset_object_dir(cache_dir, &hash), &hash)?;
+        if let Some(expected) = block_string_value(block, "sha256") {
+            verify_file_hash("locked asset", &name, &object_path, &expected)?;
+        }
+    }
+
+    Ok(assets_dir)
+}
+
+pub(super) fn verify_file_hash(
+    kind: &str,
+    name: &str,
+    path: &Path,
+    expected: &str,
+) -> Result<(), String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read {kind} {}: {error}", path.display()))?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "{kind} `{name}` hash mismatch: expected {expected}, got {actual}"
+        ));
+    }
+
+    Ok(())
+}
+
 pub(super) fn join_classpath(paths: &[PathBuf]) -> String {
     let separator = if cfg!(windows) { ";" } else { ":" };
     paths

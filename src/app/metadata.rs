@@ -305,7 +305,7 @@ pub(super) fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> 
         let Some(url) = json_string(block, "url") else {
             continue;
         };
-        let object_path = fetch_to_cache(&url, &cache_dir.join("assets").join("objects"), &hash)?;
+        let object_path = fetch_to_cache(&url, &asset_object_dir(cache_dir, &hash), &hash)?;
         let bytes = fs::read(&object_path)
             .map_err(|error| format!("failed to read {}: {error}", object_path.display()))?;
 
@@ -324,6 +324,11 @@ pub(super) fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> 
         index_sha256: sha256_hex(&index),
         objects,
     }))
+}
+
+pub(super) fn asset_object_dir(cache_dir: &Path, hash: &str) -> PathBuf {
+    let prefix = hash.get(..2).unwrap_or(hash);
+    cache_dir.join("assets").join("objects").join(prefix)
 }
 
 pub(super) fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {

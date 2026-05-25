@@ -38,7 +38,7 @@ pub(super) fn launch_minecraft_instance(
             launch_args.push(asset_index);
         }
         if side == "client" && locked_value(root, "index_url")?.is_some() {
-            let assets_dir = cache_dir.join("assets").join("objects");
+            let assets_dir = fetch_locked_assets(root, &cache_dir)?;
             command.arg("--assetsDir").arg(&assets_dir);
             launch_args.push("--assetsDir".to_string());
             launch_args.push(assets_dir.display().to_string());
