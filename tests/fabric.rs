@@ -28,10 +28,7 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
@@ -84,8 +81,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("MODSTAGE_FABRIC_META_URL", &fabric_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -96,8 +99,8 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[loader]",
@@ -220,8 +223,14 @@ sides = ["client", "server"]
         &[
             ("PATH", &path),
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -239,14 +248,174 @@ sides = ["client", "server"]
         "resolve should fetch default Fabric metadata URL\n{urls}"
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
     assert!(
         lock.contains(r#"kind = "fabric""#)
             && lock.contains(r#"version = "0.16.14""#)
-            && lock.contains(r#"client_main_class = "net.fabricmc.loader.impl.launch.knot.KnotClient""#),
+            && lock.contains(
+                r#"client_main_class = "net.fabricmc.loader.impl.launch.knot.KnotClient""#
+            ),
         "lockfile should include Fabric loader metadata\n{lock}"
     );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_uses_builtin_fabric_maven_repository_for_loader_artifacts() {
+    let project = temp_dir("fabric-builtin-repo-project");
+    let metadata = temp_dir("fabric-builtin-repo-metadata");
+    let data_home = temp_dir("fabric-builtin-repo-data");
+    let cache_home = temp_dir("fabric-builtin-repo-cache");
+    let fake_bin = temp_dir("fabric-builtin-repo-bin");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    let loader = metadata.join("fabric-loader-0.16.14.jar");
+    let intermediary = metadata.join("intermediary-26.1.2.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&loader, b"loader").expect("failed to write loader jar");
+    fs::write(&intermediary, b"intermediary").expect("failed to write intermediary jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fabric_metadata = metadata.join("fabric-loader.json");
+    fs::write(
+        &fabric_metadata,
+        r#"[{
+  "loader": {
+    "version": "0.16.14",
+    "maven": "net.fabricmc:fabric-loader:0.16.14"
+  },
+  "intermediary": {
+    "maven": "net.fabricmc:intermediary:26.1.2"
+  },
+  "launcherMeta": {
+    "mainClass": {
+      "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+    }
+  }
+}]"#,
+    )
+    .expect("failed to write fabric metadata");
+    let curl = fake_bin.join("curl");
+    fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://meta.fabricmc.net/v2/versions/loader/26.1.2) cp {} \"$out\" ;;\n  https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar) cp {} \"$out\" ;;\n  https://maven.fabricmc.net/net/fabricmc/intermediary/26.1.2/intermediary-26.1.2.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            metadata.display(),
+            fabric_metadata.display(),
+            loader.display(),
+            intermediary.display()
+        ),
+    )
+    .expect("failed to write fake curl");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "fabric-builtin-repo-test"
+
+[[instance]]
+name = "fabric-builtin-repo-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = run_in_with_env(
+        &["resolve", "fabric-builtin-repo-26.1.2"],
+        &project,
+        &[
+            ("PATH", &path),
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should use built-in Fabric Maven repository\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let urls = fs::read_to_string(metadata.join("curl-urls.txt"))
+        .expect("fake curl should record fetched URLs");
+    for expected in [
+        "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar",
+        "https://maven.fabricmc.net/net/fabricmc/intermediary/26.1.2/intermediary-26.1.2.jar",
+    ] {
+        assert!(
+            urls.contains(expected),
+            "resolve should fetch {expected}\n{urls}"
+        );
+    }
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    for expected in [
+        r#"name = "net.fabricmc:fabric-loader:0.16.14""#,
+        r#"name = "net.fabricmc:intermediary:26.1.2""#,
+        r#"repository = "fabric""#,
+        r#"url = "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar""#,
+        r#"url = "https://maven.fabricmc.net/net/fabricmc/intermediary/26.1.2/intermediary-26.1.2.jar""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
@@ -276,8 +445,11 @@ fn resolve_adds_fabric_loader_artifacts_to_the_launch_classpath() {
     fs::create_dir_all(&intermediary_dir).expect("failed to create intermediary artifact dir");
     fs::write(loader_dir.join("fabric-loader-0.16.14.jar"), b"loader")
         .expect("failed to write loader jar");
-    fs::write(intermediary_dir.join("intermediary-26.1.2.jar"), b"intermediary")
-        .expect("failed to write intermediary jar");
+    fs::write(
+        intermediary_dir.join("intermediary-26.1.2.jar"),
+        b"intermediary",
+    )
+    .expect("failed to write intermediary jar");
     let fabric_metadata = metadata.join("fabric-loader.json");
     fs::write(
         &fabric_metadata,
@@ -325,8 +497,14 @@ sides = ["client", "server"]
         &project,
         &[
             ("MODSTAGE_FABRIC_META_URL", &fabric_url),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -337,8 +515,8 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("modstage.lock should exist");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
     for expected in [
         "[[library]]",

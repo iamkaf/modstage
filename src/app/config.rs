@@ -25,9 +25,8 @@ pub(super) struct Fixture {
 
 impl Config {
     pub(super) fn parse(contents: &str) -> Result<Self, String> {
-        let project_name = project_name(contents).ok_or_else(|| {
-            "modstage.toml must contain [project] with a name".to_string()
-        })?;
+        let project_name = project_name(contents)
+            .ok_or_else(|| "modstage.toml must contain [project] with a name".to_string())?;
         let mut section = "";
         let mut repositories = Vec::new();
         let mut instances = Vec::new();
@@ -187,10 +186,16 @@ impl Config {
             }
             for fixture in &instance.fixtures {
                 if fixture.from.is_empty() {
-                    return Err(format!("instance `{}` has a fixture missing from", instance.name));
+                    return Err(format!(
+                        "instance `{}` has a fixture missing from",
+                        instance.name
+                    ));
                 }
                 if fixture.to.is_empty() {
-                    return Err(format!("instance `{}` has a fixture missing to", instance.name));
+                    return Err(format!(
+                        "instance `{}` has a fixture missing to",
+                        instance.name
+                    ));
                 }
             }
         }
@@ -261,7 +266,10 @@ pub(super) fn string_value(line: &str, key: &str) -> Option<String> {
 
 pub(super) fn key_value(line: &str) -> Option<(String, String)> {
     let (key, value) = line.split_once('=')?;
-    Some((key.trim().to_string(), value.trim().trim_matches('"').to_string()))
+    Some((
+        key.trim().to_string(),
+        value.trim().trim_matches('"').to_string(),
+    ))
 }
 
 pub(super) fn bool_value(line: &str, key: &str) -> Option<bool> {
@@ -328,6 +336,21 @@ impl<'a> MavenCoordinates<'a> {
             version,
         })
     }
+
+    pub(super) fn artifact_relative_path(&self) -> String {
+        format!(
+            "{}/{}/{}/{}-{}.jar",
+            self.group.replace('.', "/"),
+            self.artifact,
+            self.version,
+            self.artifact,
+            self.version
+        )
+    }
+
+    pub(super) fn file_name(&self) -> String {
+        format!("{}-{}.jar", self.artifact, self.version)
+    }
 }
 
 pub(super) fn maven_artifact(
@@ -357,17 +380,9 @@ pub(super) fn maven_artifact_under(
     mut path: PathBuf,
     coordinates: &MavenCoordinates<'_>,
 ) -> Option<PathBuf> {
-
-    for segment in coordinates.group.split('.') {
+    for segment in coordinates.artifact_relative_path().split('/') {
         path.push(segment);
     }
-
-    path.push(coordinates.artifact);
-    path.push(coordinates.version);
-    path.push(format!(
-        "{}-{}.jar",
-        coordinates.artifact, coordinates.version
-    ));
 
     path.is_file().then_some(path)
 }
