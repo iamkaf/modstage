@@ -642,12 +642,28 @@ sides = ["server"]
         r#"instance = "server-exec-26.1.2""#,
         r#"side = "server""#,
         r#"status = "passed""#,
+        "launch_plan = ",
         "exit_code = 0",
         "timed_out = false",
     ] {
         assert!(
             report.contains(expected),
             "run report should contain {expected:?}\n{report}"
+        );
+    }
+    let launch_plan = fs::read_to_string(report_dir.join("launch-plan.toml"))
+        .expect("launch plan snapshot should exist");
+    for expected in [
+        r#"instance = "server-exec-26.1.2""#,
+        r#"side = "server""#,
+        "java = ",
+        "artifact = ",
+        r#"arg = "-jar""#,
+        r#"arg = "nogui""#,
+    ] {
+        assert!(
+            launch_plan.contains(expected),
+            "launch plan should contain {expected:?}\n{launch_plan}"
         );
     }
     assert_eq!(

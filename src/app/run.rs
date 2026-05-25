@@ -196,34 +196,60 @@ pub(super) fn launch_minecraft_instance(
         .clone()
         .unwrap_or_else(|| PathBuf::from(java_bin()));
     let mut command = Command::new(&java);
+    let mut launch_args = Vec::new();
     if side == "client"
         && let Some(main_class) = locked_main_class(root, side)?
     {
         let mut classpath = vec![artifact.clone()];
         classpath.extend(fetch_locked_libraries(root, &cache_dir.join("libraries"))?);
+        let classpath = join_classpath(&classpath);
         command
             .arg("-cp")
-            .arg(join_classpath(&classpath))
-            .arg(main_class);
+            .arg(&classpath)
+            .arg(&main_class);
+        launch_args.push("-cp".to_string());
+        launch_args.push(classpath);
+        launch_args.push(main_class);
         if let Some(asset_index) = locked_value(root, "id")? {
-            command.arg("--assetIndex").arg(asset_index);
+            command.arg("--assetIndex").arg(&asset_index);
+            launch_args.push("--assetIndex".to_string());
+            launch_args.push(asset_index);
         }
         if locked_value(root, "index_url")?.is_some() {
+            let assets_dir = cache_dir.join("assets").join("objects");
             command
                 .arg("--assetsDir")
-                .arg(cache_dir.join("assets").join("objects"));
+                .arg(&assets_dir);
+            launch_args.push("--assetsDir".to_string());
+            launch_args.push(assets_dir.display().to_string());
         }
     } else if side == "server" {
         command.arg("-jar").arg(&artifact);
         command.arg("nogui");
+        launch_args.push("-jar".to_string());
+        launch_args.push(artifact.display().to_string());
+        launch_args.push("nogui".to_string());
     } else {
         command.arg("-jar").arg(&artifact);
+        launch_args.push("-jar".to_string());
+        launch_args.push(artifact.display().to_string());
     }
     if let Some(scenario) = &scenario {
         command.arg("--modstageScenario").arg(scenario);
         command.env("MODSTAGE_RUN_DIR", run_dir);
         command.env("MODSTAGE_ARTIFACT_DIR", run_dir.join("artifacts"));
+        launch_args.push("--modstageScenario".to_string());
+        launch_args.push(scenario.display().to_string());
     }
+    let launch_plan = write_launch_plan(
+        instance,
+        side,
+        &java,
+        &artifact,
+        scenario.as_deref(),
+        run_dir,
+        &launch_args,
+    )?;
     command.current_dir(game_dir);
     let output = run_process_with_timeout(&mut command, options.timeout_duration()?)
         .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
@@ -252,7 +278,7 @@ pub(super) fn launch_minecraft_instance(
     fs::write(
         run_dir.join("run.toml"),
         format!(
-            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
+            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\nlaunch_plan = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
             instance.name,
             side,
             if timed_out {
@@ -269,6 +295,7 @@ pub(super) fn launch_minecraft_instance(
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
+            launch_plan.display(),
             exit_code.unwrap_or(-1),
             timed_out,
             options.timeout.as_deref().unwrap_or(""),
@@ -299,6 +326,49 @@ pub(super) fn launch_minecraft_instance(
 pub(super) struct RunArtifacts {
     minecraft_log: Option<PathBuf>,
     crash_report: Option<PathBuf>,
+}
+
+pub(super) fn write_launch_plan(
+    instance: &Instance,
+    side: &str,
+    java: &Path,
+    artifact: &Path,
+    scenario: Option<&Path>,
+    run_dir: &Path,
+    args: &[String],
+) -> Result<PathBuf, String> {
+    let path = run_dir.join("launch-plan.toml");
+    let mut plan = format!(
+        "instance = \"{}\"\nside = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\n",
+        instance.name,
+        side,
+        java.display(),
+        artifact.display(),
+        scenario
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    );
+
+    for arg in args {
+        plan.push_str("\n[[argument]]\n");
+        plan.push_str(&format!("arg = \"{}\"\n", toml_escape(arg)));
+    }
+
+    plan.push_str("\n[[environment]]\nname = \"MODSTAGE_RUN_DIR\"\nvalue = \"");
+    plan.push_str(&toml_escape(&run_dir.display().to_string()));
+    plan.push_str("\"\n");
+    plan.push_str("\n[[environment]]\nname = \"MODSTAGE_ARTIFACT_DIR\"\nvalue = \"");
+    plan.push_str(&toml_escape(&run_dir.join("artifacts").display().to_string()));
+    plan.push_str("\"\n");
+
+    fs::write(&path, plan)
+        .map_err(|error| format!("failed to write launch plan {}: {error}", path.display()))?;
+
+    Ok(path)
+}
+
+pub(super) fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub(super) fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<RunArtifacts, String> {
