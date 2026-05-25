@@ -104,6 +104,7 @@ sides = [{}]\n",
         for coordinate in [
             loader.loader_maven.as_deref(),
             loader.intermediary_maven.as_deref(),
+            loader.installer_maven.as_deref(),
         ]
         .into_iter()
         .flatten()
