@@ -188,6 +188,14 @@ fn launch_minecraft_instance(
             .arg("-cp")
             .arg(join_classpath(&classpath))
             .arg(main_class);
+        if let Some(asset_index) = locked_value(root, "id")? {
+            command.arg("--assetIndex").arg(asset_index);
+        }
+        if locked_value(root, "index_url")?.is_some() {
+            command
+                .arg("--assetsDir")
+                .arg(cache_dir.join("assets").join("objects"));
+        }
     } else if side == "server" {
         command.arg("-jar").arg(&artifact);
         command.arg("nogui");

@@ -704,9 +704,28 @@ fn run_client_uses_mojang_main_class_and_libraries_from_lockfile() {
     let server = metadata.join("server.jar");
     let client = metadata.join("client.jar");
     let library = metadata.join("example-lib-1.0.0.jar");
+    let asset = metadata.join("asset.ogg");
     fs::write(&server, b"server").expect("failed to write server jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&library, b"library").expect("failed to write library jar");
+    fs::write(&asset, b"asset").expect("failed to write asset object");
+    let asset_index = metadata.join("assets-26.json");
+    fs::write(
+        &asset_index,
+        format!(
+            r#"{{
+  "objects": {{
+    "minecraft/sounds/example.ogg": {{
+      "hash": "07073e89283a7b4c254e22b82c08a83738c6a1f0",
+      "size": 5,
+      "url": "file://{}"
+    }}
+  }}
+}}"#,
+            asset.display()
+        ),
+    )
+    .expect("failed to write asset index");
     let version_json = metadata.join("26.1.2.json");
     fs::write(
         &version_json,
@@ -714,6 +733,10 @@ fn run_client_uses_mojang_main_class_and_libraries_from_lockfile() {
             r#"{{
   "id": "26.1.2",
   "mainClass": "net.minecraft.client.main.Main",
+  "assetIndex": {{
+    "id": "26",
+    "url": "file://{}"
+  }},
   "javaVersion": {{ "majorVersion": 25 }},
   "downloads": {{
     "client": {{ "url": "file://{}" }},
@@ -729,6 +752,7 @@ fn run_client_uses_mojang_main_class_and_libraries_from_lockfile() {
     }}
   }}]
 }}"#,
+            asset_index.display(),
             client.display(),
             server.display(),
             library.display()
@@ -822,6 +846,10 @@ sides = ["client"]
             && java_args.contains("client.jar")
             && java_args.contains("example-lib-1.0.0.jar")
             && java_args.contains("net.minecraft.client.main.Main")
+            && java_args.contains("--assetIndex")
+            && java_args.contains("26")
+            && java_args.contains("--assetsDir")
+            && java_args.contains("assets")
             && !java_args.contains("-jar"),
         "client launch should execute a classpath main-class launch\n{java_args}"
     );
