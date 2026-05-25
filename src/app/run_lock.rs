@@ -1,8 +1,13 @@
 use super::*;
 
-pub(super) fn verify_locked_mod_hashes(root: &Path, instance: &Instance) -> Result<(), String> {
+pub(super) fn verify_locked_mod_hashes(
+    root: &Path,
+    instance: &Instance,
+    cache_dir: &Path,
+) -> Result<(), String> {
     for source in &instance.mods {
-        let Some((path, expected)) = locked_mod_path_and_hash(root, source)? else {
+        let Some((path, expected)) = restore_locked_mod_path_and_hash(root, source, cache_dir)?
+        else {
             continue;
         };
         let bytes = fs::read(&path)
@@ -43,10 +48,33 @@ pub(super) fn verify_locked_artifact_hash(
     Ok(())
 }
 
-pub(super) fn locked_mod_path_and_hash(
+pub(super) struct LockedMod {
+    pub(super) path: PathBuf,
+    pub(super) sha256: String,
+}
+
+pub(super) fn restore_locked_mod_path_and_hash(
     root: &Path,
     source: &str,
+    cache_dir: &Path,
 ) -> Result<Option<(PathBuf, String)>, String> {
+    restore_locked_mod(root, source, cache_dir)
+        .map(|locked| locked.map(|locked| (locked.path, locked.sha256)))
+}
+
+pub(super) fn restore_locked_mod_path(
+    root: &Path,
+    source: &str,
+    cache_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    restore_locked_mod(root, source, cache_dir).map(|locked| locked.map(|locked| locked.path))
+}
+
+pub(super) fn restore_locked_mod(
+    root: &Path,
+    source: &str,
+    cache_dir: &Path,
+) -> Result<Option<LockedMod>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(None);
@@ -59,26 +87,20 @@ pub(super) fn locked_mod_path_and_hash(
             && let Some(path) = block_string_value(block, "path")
             && let Some(sha256) = block_string_value(block, "sha256")
         {
-            return Ok(Some((PathBuf::from(path), sha256)));
-        }
-    }
-
-    Ok(None)
-}
-
-pub(super) fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
-    let lock_path = root.join("modstage.lock");
-    if !lock_path.is_file() {
-        return Ok(None);
-    }
-
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-    for block in lock.split("[[mod]]").skip(1) {
-        if block_string_value(block, "source").as_deref() == Some(source)
-            && let Some(path) = block_string_value(block, "path")
-        {
-            return Ok(Some(PathBuf::from(path)));
+            let path = PathBuf::from(path);
+            let url = block_string_value(block, "url");
+            let path = if path.is_file() {
+                path
+            } else if let Some(url) = &url {
+                let file_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("mod.jar");
+                fetch_to_cache(url, cache_dir, file_name)?
+            } else {
+                path
+            };
+            return Ok(Some(LockedMod { path, sha256 }));
         }
     }
 

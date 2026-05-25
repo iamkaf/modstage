@@ -35,10 +35,11 @@ pub(super) fn run_instance(
     if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
         resolve_instance(Some(config_path.clone()), Some(selected))?;
     }
-    if options.locked {
-        verify_locked_mod_hashes(root, instance)?;
-    }
     let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let mod_cache = dirs.cache.join("downloads").join("mods");
+    if options.locked {
+        verify_locked_mod_hashes(root, instance, &mod_cache)?;
+    }
     let game_dir = dirs
         .data
         .join("instances")
@@ -50,7 +51,7 @@ pub(super) fn run_instance(
 
     fs::create_dir_all(&mods_dir)
         .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
-    reconcile_mods(root, instance, &mods_dir)?;
+    reconcile_mods(root, instance, &mods_dir, &mod_cache)?;
     apply_fixtures(root, side, instance, &game_dir)?;
 
     if side == "server" {

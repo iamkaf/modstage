@@ -415,6 +415,164 @@ mods = [
 }
 
 #[test]
+#[cfg(unix)]
+fn locked_run_restores_remote_maven_mods_after_cache_deletion() {
+    let project = temp_dir("run-remote-maven-project");
+    let metadata = temp_dir("run-remote-maven-metadata");
+    let data_home = temp_dir("run-remote-maven-data");
+    let cache_home = temp_dir("run-remote-maven-cache");
+    let fake_bin = temp_dir("run-remote-maven-bin");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    let remote_mod = metadata.join("remote-mod-1.0.0.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&remote_mod, b"remote mod").expect("failed to write remote Maven mod jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let curl = fake_bin.join("curl");
+    fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://repo.maven.apache.org/maven2/com/example/remote-mod/1.0.0/remote-mod-1.0.0.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            metadata.display(),
+            remote_mod.display()
+        ),
+    )
+    .expect("failed to write fake curl");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
+    let fake_java = metadata.join("fake-java-remote-maven");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > java-args.txt\nprintf 'remote Maven mod restored\\n'\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-remote-maven"
+
+[[instance]]
+name = "remote-maven-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+mods = [
+  "maven:com.example:remote-mod:1.0.0",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "remote-maven-26.1.2"],
+        &project,
+        &[
+            ("PATH", &path),
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should download the remote Maven mod\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    fs::remove_dir_all(cache_home.join("modstage").join("downloads").join("maven"))
+        .expect("failed to remove Maven download cache");
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_string_env(
+        &[
+            "run",
+            "server",
+            "remote-maven-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("PATH", &path),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "locked run should restore a remote Maven mod from the lockfile URL\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let game_dir = first_child(&state_root)
+        .join("remote-maven-26.1.2")
+        .join("server")
+        .join("game");
+    let staged = game_dir.join("mods").join("remote-mod-1.0.0.jar");
+    assert!(
+        staged.is_file(),
+        "locked run should stage the restored Maven mod"
+    );
+    assert_eq!(
+        fs::read(&staged).expect("staged remote Maven mod should be readable"),
+        b"remote mod"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
+}
+
+#[test]
 fn run_applies_side_fixtures_without_replacing_existing_files_by_default() {
     let project = temp_dir("run-fixture-project");
     let data_home = temp_dir("run-fixture-data");
