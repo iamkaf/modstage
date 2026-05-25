@@ -133,3 +133,54 @@ mods = [
 
     fs::remove_dir_all(project).expect("failed to remove temp project");
 }
+
+#[test]
+fn resolve_hashes_local_jar_mods_in_the_lockfile() {
+    let project = temp_project("resolve-local-jar");
+    fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
+    fs::write(project.join("mods").join("example.jar"), b"abc")
+        .expect("failed to write local jar");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-local-jar"
+
+[[instance]]
+name = "local-jar-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+mods = [
+  "./mods/example.jar",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in(&["resolve", "local-jar-26.1.2"], &project);
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+    let jar_path = project.join("mods").join("example.jar");
+
+    for expected in [
+        "[[mod]]",
+        r#"source = "./mods/example.jar""#,
+        &format!(r#"path = "{}""#, jar_path.display()),
+        r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
