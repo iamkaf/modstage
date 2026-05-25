@@ -601,6 +601,7 @@ fn resolve_loader_metadata(
 ) -> Result<Option<LoaderMetadata>, String> {
     match instance.loader.as_str() {
         "fabric" => resolve_fabric_loader_metadata(config, instance, root),
+        "forge" => resolve_installer_loader_metadata(config, instance, root, "forge"),
         "neoforge" => resolve_neoforge_loader_metadata(config, instance, root),
         _ => Ok(None),
     }
@@ -641,25 +642,34 @@ fn resolve_neoforge_loader_metadata(
     instance: &Instance,
     root: &Path,
 ) -> Result<Option<LoaderMetadata>, String> {
-    let Some(url) = neoforge_meta_url() else {
+    resolve_installer_loader_metadata(config, instance, root, "neoforge")
+}
+
+fn resolve_installer_loader_metadata(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+    loader: &str,
+) -> Result<Option<LoaderMetadata>, String> {
+    let Some(url) = installer_loader_meta_url(loader) else {
         return Ok(None);
     };
-    let metadata = loader_metadata_text(config, root, "neoforge", &url, instance)?;
+    let metadata = loader_metadata_text(config, root, loader, &url, instance)?;
 
     Ok(Some(LoaderMetadata {
-        kind: "neoforge".to_string(),
+        kind: loader.to_string(),
         version: json_string(&metadata, "version")
             .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
         loader_maven: None,
         intermediary_maven: None,
         installer_maven: Some(
             json_string(&metadata, "installer_maven")
-                .ok_or_else(|| "NeoForge metadata did not include installer maven coordinate".to_string())?,
+                .ok_or_else(|| format!("{loader} metadata did not include installer maven coordinate"))?,
         ),
         client_main_class: json_string(&metadata, "client_main_class")
-            .ok_or_else(|| "NeoForge metadata did not include client main class".to_string())?,
+            .ok_or_else(|| format!("{loader} metadata did not include client main class"))?,
         server_main_class: json_string(&metadata, "server_main_class")
-            .ok_or_else(|| "NeoForge metadata did not include server main class".to_string())?,
+            .ok_or_else(|| format!("{loader} metadata did not include server main class"))?,
     }))
 }
 
@@ -681,8 +691,12 @@ fn fabric_meta_url() -> Option<String> {
     env::var("MODSTAGE_FABRIC_META_URL").ok()
 }
 
-fn neoforge_meta_url() -> Option<String> {
-    env::var("MODSTAGE_NEOFORGE_META_URL").ok()
+fn installer_loader_meta_url(loader: &str) -> Option<String> {
+    match loader {
+        "forge" => env::var("MODSTAGE_FORGE_META_URL").ok(),
+        "neoforge" => env::var("MODSTAGE_NEOFORGE_META_URL").ok(),
+        _ => None,
+    }
 }
 
 fn resolve_minecraft_metadata(
