@@ -52,6 +52,7 @@ pub(super) fn run_instance(
         fs::write(game_dir.join("eula.txt"), "eula=true\n")
             .map_err(|error| format!("failed to write server eula.txt: {error}"))?;
     }
+    write_side_launcher_metadata(instance, side, &game_dir)?;
 
     let run_dir = dirs
         .data
@@ -582,6 +583,42 @@ pub(super) fn apply_fixtures(
     }
 
     Ok(())
+}
+
+pub(super) fn write_side_launcher_metadata(
+    instance: &Instance,
+    side: &str,
+    game_dir: &Path,
+) -> Result<(), String> {
+    let mut metadata = format!(
+        "instance = \"{}\"\nside = \"{}\"\nminecraft = \"{}\"\nloader = \"{}\"\n",
+        toml_escape(&instance.name),
+        toml_escape(side),
+        toml_escape(&instance.minecraft),
+        toml_escape(&instance.loader)
+    );
+
+    if let Some(loader_version) = &instance.loader_version {
+        metadata.push_str(&format!(
+            "loader_version = \"{}\"\n",
+            toml_escape(loader_version)
+        ));
+    }
+
+    metadata.push_str("mods = [");
+    metadata.push_str(
+        &instance
+            .mods
+            .iter()
+            .map(|source| format!("\"{}\"", toml_escape(source)))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    metadata.push_str("]\n");
+
+    let path = game_dir.join("modstage-launch.toml");
+    fs::write(&path, metadata)
+        .map_err(|error| format!("failed to write launcher metadata {}: {error}", path.display()))
 }
 
 pub(super) fn copy_fixture_tree(source: &Path, destination: &Path, replace: bool) -> Result<(), String> {

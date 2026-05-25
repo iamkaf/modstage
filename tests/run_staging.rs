@@ -107,6 +107,20 @@ mods = [
         fs::read_to_string(instance_dir.join("eula.txt")).expect("eula.txt should exist"),
         "eula=true\n"
     );
+    let launch_metadata = fs::read_to_string(instance_dir.join("modstage-launch.toml"))
+        .expect("side-specific launcher metadata should be staged");
+    for expected in [
+        r#"instance = "server-stage-26.1.2""#,
+        r#"side = "server""#,
+        r#"loader = "fabric""#,
+        r#"minecraft = "26.1.2""#,
+        r#""./mods/example.jar""#,
+    ] {
+        assert!(
+            launch_metadata.contains(expected),
+            "launcher metadata should contain {expected:?}\n{launch_metadata}"
+        );
+    }
 
     let reports_root = data_home.join("modstage").join("runs");
     let report_path = first_descendant_file(&reports_root, "run.toml");
