@@ -267,6 +267,9 @@ pub(super) fn newest_crash_report(
         return Ok(None);
     }
 
+    let cutoff = run_started
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or(UNIX_EPOCH);
     let mut newest = None;
     for entry in fs::read_dir(crash_dir)
         .map_err(|error| format!("failed to read {}: {error}", crash_dir.display()))?
@@ -278,12 +281,17 @@ pub(super) fn newest_crash_report(
             .metadata()
             .and_then(|metadata| metadata.modified())
             .map_err(|error| format!("failed to read crash report metadata: {error}"))?;
-        if path.is_file() && modified >= run_started {
-            newest = Some(path);
+        if path.is_file() && modified >= cutoff {
+            newest = match newest {
+                Some((newest_modified, newest_path)) if newest_modified > modified => {
+                    Some((newest_modified, newest_path))
+                }
+                _ => Some((modified, path)),
+            };
         }
     }
 
-    Ok(newest)
+    Ok(newest.map(|(_, path)| path))
 }
 
 pub(super) fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf, String> {
