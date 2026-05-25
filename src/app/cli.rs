@@ -32,12 +32,8 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             print!("{}", help_for(command, rest)?);
             Ok(())
         }
-        [command] if command == "init" => {
-            init_project()
-        }
-        [command] if command == "resolve" => {
-            resolve_instance(invocation.config, None)
-        }
+        [command] if command == "init" => init_project(),
+        [command] if command == "resolve" => resolve_instance(invocation.config, None),
         [command, instance] if command == "resolve" => {
             resolve_instance(invocation.config, Some(instance))
         }
@@ -76,8 +72,8 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
         [command, subject, rest @ ..] if command == "java" && subject == "doctor" => {
             java_doctor(rest)
         }
-        [command, subject, major] if command == "java" && subject == "install" => {
-            java_install(major)
+        [command, subject, major, rest @ ..] if command == "java" && subject == "install" => {
+            java_install(major, rest)
         }
         [command, ..] if command == "java" => Err("unknown java command".to_string()),
         [command, ..] => Err(format!("unknown command `{command}`\n\n{ROOT_HELP}")),
@@ -129,9 +125,7 @@ pub(super) fn help_for(command: &str, rest: &[String]) -> Result<&'static str, S
         ("init", _) => "Usage:\n  modstage init\n",
         ("resolve", _) => "Usage:\n  modstage resolve [instance]\n",
         ("run", _) => "Usage:\n  modstage run <client|server> <instance>\n",
-        ("inspect", [subject, ..]) if subject == "config" => {
-            "Usage:\n  modstage inspect config\n"
-        }
+        ("inspect", [subject, ..]) if subject == "config" => "Usage:\n  modstage inspect config\n",
         ("inspect", [subject, ..]) if subject == "lock" => {
             "Usage:\n  modstage inspect lock [instance]\n"
         }
@@ -151,9 +145,7 @@ pub(super) fn help_for(command: &str, rest: &[String]) -> Result<&'static str, S
         ("java", [subject, ..]) if subject == "install" => {
             "Usage:\n  modstage java install <major>\n"
         }
-        ("java", [subject, ..]) if subject == "doctor" => {
-            "Usage:\n  modstage java doctor\n"
-        }
+        ("java", [subject, ..]) if subject == "doctor" => "Usage:\n  modstage java doctor\n",
         ("java", _) => "Usage:\n  modstage java <list|install|doctor>\n",
         _ => return Err(format!("unknown command `{command}`")),
     };

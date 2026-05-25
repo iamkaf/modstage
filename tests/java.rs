@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -30,7 +33,12 @@ fn run_with_env(args: &[&str], envs: &[(&str, &str)]) -> Output {
 #[test]
 fn java_doctor_reports_the_configured_java_runtime() {
     let java = java_on_path().expect("test environment must have java on PATH");
-    let output = run(&["java", "doctor", "--java", java.to_str().expect("java path is not UTF-8")]);
+    let output = run(&[
+        "java",
+        "doctor",
+        "--java",
+        java.to_str().expect("java path is not UTF-8"),
+    ]);
 
     assert!(
         output.status.success(),
@@ -81,11 +89,7 @@ fn java_on_path() -> Option<std::path::PathBuf> {
 }
 
 fn java_bin() -> &'static str {
-    if cfg!(windows) {
-        "java.exe"
-    } else {
-        "java"
-    }
+    if cfg!(windows) { "java.exe" } else { "java" }
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -112,9 +116,18 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let output = run_with_env(
         &["java", "install", "25"],
         &[
-            ("MODSTAGE_AZUL_METADATA_URL", &format!("file://{}", metadata.display())),
-            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
-            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+            (
+                "MODSTAGE_AZUL_METADATA_URL",
+                &format!("file://{}", metadata.display()),
+            ),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
         ],
     );
 
@@ -147,7 +160,9 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
             && record.is_file()
             && stdout.contains("java archive:")
             && stdout.contains("managed java:")
-            && stdout.contains("sha256: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            && stdout.contains(
+                "sha256: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            ),
         "java install should report durable managed runtime state\n{stdout}"
     );
     let record = fs::read_to_string(record).expect("runtime.toml should be readable");
@@ -170,15 +185,75 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     fs::remove_dir_all(temp).expect("failed to remove temp dir");
 }
 
+#[test]
+#[cfg(unix)]
+fn java_install_can_register_an_existing_runtime_as_managed_java() {
+    let temp = temp_dir("java-install-existing");
+    let data_home = temp.join("data");
+    let cache_home = temp.join("cache");
+    let bin = temp.join("runtime").join("bin");
+    fs::create_dir_all(&bin).expect("failed to create fake runtime bin");
+    let java = bin.join("java");
+    fs::write(
+        &java,
+        "#!/bin/sh\nprintf 'java.version = 25.0.2\\n' >&2\nprintf 'os.arch = amd64\\n' >&2\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&java, permissions).expect("failed to chmod fake java");
+
+    let output = run_with_env(
+        &[
+            "java",
+            "install",
+            "25",
+            "--java",
+            java.to_str().expect("java path is not UTF-8"),
+        ],
+        &[
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "java install --java should validate and register an existing runtime\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let record = data_home
+        .join("modstage")
+        .join("java")
+        .join("25")
+        .join("runtime.toml");
+    let record = fs::read_to_string(record).expect("runtime.toml should be readable");
+    assert!(
+        record.contains(r#"major = 25"#)
+            && record.contains(&format!(r#"java = "{}""#, java.display()))
+            && record.contains(r#"version = "25.0.2""#),
+        "runtime record should point at the validated Java executable\n{record}"
+    );
+
+    fs::remove_dir_all(temp).expect("failed to remove temp dir");
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
