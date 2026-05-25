@@ -1,8 +1,8 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ROOT_HELP: &str = "\
 modstage
@@ -563,6 +563,10 @@ fn run_instance(
             return Ok(());
         }
 
+        if result.timed_out {
+            return Err("server run timed out".to_string());
+        }
+
         return Err(format!(
             "server run failed with exit code {}",
             result.exit_code
@@ -621,11 +625,19 @@ impl RunOptions {
             timeout,
         })
     }
+
+    fn timeout_duration(&self) -> Result<Option<Duration>, String> {
+        self.timeout
+            .as_deref()
+            .map(parse_duration)
+            .transpose()
+    }
 }
 
 struct RunResult {
     success: bool,
     exit_code: Option<i32>,
+    timed_out: bool,
 }
 
 fn launch_server_instance(
@@ -644,12 +656,14 @@ fn launch_server_instance(
         .java
         .clone()
         .unwrap_or_else(|| PathBuf::from(java_bin()));
-    let output = Command::new(&java)
-        .arg("-jar")
-        .arg(&server_jar)
-        .arg("nogui")
-        .current_dir(game_dir)
-        .output()
+    let output = run_process_with_timeout(
+        Command::new(&java)
+            .arg("-jar")
+            .arg(&server_jar)
+            .arg("nogui")
+            .current_dir(game_dir),
+        options.timeout_duration()?,
+    )
         .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
 
     print!("{}", String::from_utf8_lossy(&output.stdout));
@@ -661,17 +675,25 @@ fn launch_server_instance(
         .map_err(|error| format!("failed to write stderr log: {error}"))?;
 
     let exit_code = output.status.code();
-    let success = output.status.success();
+    let timed_out = output.timed_out;
+    let success = output.status.success() && !timed_out;
     fs::write(
         run_dir.join("run.toml"),
         format!(
-            "instance = \"{}\"\nside = \"server\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nserver_jar = \"{}\"\nexit_code = {}\ntimed_out = false\ntimeout = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\n",
+            "instance = \"{}\"\nside = \"server\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nserver_jar = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\n",
             instance.name,
-            if success { "passed" } else { "failed" },
+            if timed_out {
+                "timed_out"
+            } else if success {
+                "passed"
+            } else {
+                "failed"
+            },
             game_dir.display(),
             java.display(),
             server_jar.display(),
             exit_code.unwrap_or(-1),
+            timed_out,
             options.timeout.as_deref().unwrap_or(""),
             run_dir.join("stdout.log").display(),
             run_dir.join("stderr.log").display()
@@ -679,7 +701,93 @@ fn launch_server_instance(
     )
     .map_err(|error| format!("failed to write run report: {error}"))?;
 
-    Ok(RunResult { success, exit_code })
+    Ok(RunResult {
+        success,
+        exit_code,
+        timed_out,
+    })
+}
+
+struct TimedOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
+
+fn run_process_with_timeout(
+    command: &mut Command,
+    timeout: Option<Duration>,
+) -> Result<TimedOutput, String> {
+    let Some(timeout) = timeout else {
+        let output = command
+            .output()
+            .map_err(|error| format!("process execution failed: {error}"))?;
+        return Ok(TimedOutput {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            timed_out: false,
+        });
+    };
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("process spawn failed: {error}"))?;
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("process wait failed: {error}"))?
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("process output collection failed: {error}"))?;
+            return Ok(TimedOutput {
+                status: output.status,
+                stdout: output.stdout,
+                stderr: output.stderr,
+                timed_out: false,
+            });
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("process output collection failed: {error}"))?;
+            return Ok(TimedOutput {
+                status: output.status,
+                stdout: output.stdout,
+                stderr: output.stderr,
+                timed_out: true,
+            });
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse_duration(value: &str) -> Result<Duration, String> {
+    if let Some(ms) = value.strip_suffix("ms") {
+        let millis = ms
+            .parse()
+            .map_err(|error| format!("invalid timeout `{value}`: {error}"))?;
+        return Ok(Duration::from_millis(millis));
+    }
+
+    if let Some(seconds) = value.strip_suffix('s') {
+        let seconds = seconds
+            .parse()
+            .map_err(|error| format!("invalid timeout `{value}`: {error}"))?;
+        return Ok(Duration::from_secs(seconds));
+    }
+
+    Err(format!("timeout `{value}` must use `ms` or `s`"))
 }
 
 fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {

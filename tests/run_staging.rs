@@ -471,6 +471,139 @@ sides = ["server"]
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
 
+#[test]
+#[cfg(unix)]
+fn run_server_enforces_timeout_and_records_it() {
+    let project = temp_dir("run-timeout-project");
+    let metadata = temp_dir("run-timeout-metadata");
+    let data_home = temp_dir("run-timeout-data");
+    let cache_home = temp_dir("run-timeout-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java-timeout");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'before timeout\\n'\nexec sleep 5\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-timeout"
+
+[[instance]]
+name = "server-timeout-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-timeout-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "server-timeout-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "10ms",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        !run.status.success(),
+        "run should fail when the process times out"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("server run timed out"),
+        "timeout should be reported clearly\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let reports_root = data_home.join("modstage").join("runs");
+    let report_path = first_descendant_file(&reports_root, "run.toml");
+    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report = fs::read_to_string(&report_path).expect("run report should be readable");
+    for expected in [
+        r#"instance = "server-timeout-26.1.2""#,
+        r#"status = "timed_out""#,
+        "timed_out = true",
+        r#"timeout = "10ms""#,
+    ] {
+        assert!(
+            report.contains(expected),
+            "timeout report should contain {expected:?}\n{report}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(report_dir.join("stdout.log")).expect("stdout log should exist"),
+        "before timeout\n"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
 fn first_child(path: &Path) -> PathBuf {
     fs::read_dir(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
