@@ -41,10 +41,7 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
@@ -56,8 +53,7 @@ fn run_server_reconciles_mods_writes_eula_and_records_report_before_launch() {
     let data_home = temp_dir("run-stage-data");
     let cache_home = temp_dir("run-stage-cache");
     fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
-    fs::write(project.join("mods").join("example.jar"), b"abc")
-        .expect("failed to write local jar");
+    fs::write(project.join("mods").join("example.jar"), b"abc").expect("failed to write local jar");
     fs::write(
         project.join("modstage.toml"),
         r#"[project]
@@ -79,7 +75,10 @@ mods = [
     let output = run_in_with_env(
         &["run", "server", "server-stage-26.1.2", "--timeout", "0s"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
 
     assert!(
@@ -130,8 +129,7 @@ mods = [
         .and_then(|name| name.to_str())
         .expect("run report should have a UTF-8 run id")
         .to_string();
-    let report = fs::read_to_string(&report_path)
-        .expect("run report should be readable");
+    let report = fs::read_to_string(&report_path).expect("run report should be readable");
     assert!(
         report.contains(r#"instance = "server-stage-26.1.2""#)
             && report.contains(r#"side = "server""#)
@@ -142,7 +140,10 @@ mods = [
     let inspect = run_in_with_env(
         &["inspect", "run", &run_id],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         inspect.status.success(),
@@ -166,7 +167,10 @@ mods = [
             "server",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         inspect_instance.status.success(),
@@ -190,9 +194,18 @@ mods = [
     }
 
     let clean = run_in_with_env(
-        &["clean", "instance", "server-stage-26.1.2", "--side", "server"],
+        &[
+            "clean",
+            "instance",
+            "server-stage-26.1.2",
+            "--side",
+            "server",
+        ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         clean.status.success(),
@@ -282,7 +295,10 @@ mods = [
     let run = run_in_with_env(
         &["run", "server", "server-modrinth-26.1.2"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -353,7 +369,10 @@ mods = [
     let resolve = run_in_with_string_env(
         &["resolve", "server-maven-26.1.2"],
         &project,
-        &[("XDG_DATA_HOME", data_home_str), ("XDG_CACHE_HOME", cache_home_str)],
+        &[
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
     );
     assert!(
         resolve.status.success(),
@@ -365,7 +384,10 @@ mods = [
     let run = run_in_with_env(
         &["run", "server", "server-maven-26.1.2"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -399,8 +421,11 @@ fn run_applies_side_fixtures_without_replacing_existing_files_by_default() {
     let cache_home = temp_dir("run-fixture-cache");
     let fixture = project.join("fixtures").join("server");
     fs::create_dir_all(fixture.join("config")).expect("failed to create fixture dir");
-    fs::write(fixture.join("config").join("server.properties"), b"fixture=true\n")
-        .expect("failed to write fixture config");
+    fs::write(
+        fixture.join("config").join("server.properties"),
+        b"fixture=true\n",
+    )
+    .expect("failed to write fixture config");
     fs::write(fixture.join("motd.txt"), b"fixture motd\n").expect("failed to write fixture file");
     fs::write(
         project.join("modstage.lock"),
@@ -429,7 +454,10 @@ side = "server"
     let first_run = run_in_with_env(
         &["run", "server", "server-fixture-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !first_run.status.success(),
@@ -455,7 +483,10 @@ side = "server"
     let second_run = run_in_with_env(
         &["run", "server", "server-fixture-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !second_run.status.success(),
@@ -479,8 +510,11 @@ fn run_applies_fixture_replace_true_without_deleting_unrelated_files() {
     let cache_home = temp_dir("run-fixture-replace-cache");
     let fixture = project.join("fixtures").join("server");
     fs::create_dir_all(fixture.join("config")).expect("failed to create fixture dir");
-    fs::write(fixture.join("config").join("server.properties"), b"fixture=true\n")
-        .expect("failed to write fixture config");
+    fs::write(
+        fixture.join("config").join("server.properties"),
+        b"fixture=true\n",
+    )
+    .expect("failed to write fixture config");
     fs::write(
         project.join("modstage.lock"),
         "# This file is generated by modstage. Do not edit by hand.\nversion = 1\n",
@@ -509,7 +543,10 @@ replace = true
     let first_run = run_in_with_env(
         &["run", "server", "server-fixture-replace-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !first_run.status.success(),
@@ -532,7 +569,10 @@ replace = true
     let second_run = run_in_with_env(
         &["run", "server", "server-fixture-replace-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !second_run.status.success(),
@@ -562,8 +602,7 @@ fn run_locked_requires_an_existing_lockfile_before_staging() {
     let data_home = temp_dir("run-locked-data");
     let cache_home = temp_dir("run-locked-cache");
     fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
-    fs::write(project.join("mods").join("example.jar"), b"abc")
-        .expect("failed to write local jar");
+    fs::write(project.join("mods").join("example.jar"), b"abc").expect("failed to write local jar");
     fs::write(
         project.join("modstage.toml"),
         r#"[project]
@@ -585,7 +624,10 @@ mods = [
     let output = run_in_with_env(
         &["run", "server", "locked-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
 
     assert!(
@@ -615,8 +657,7 @@ fn locked_run_rejects_mods_that_no_longer_match_the_lockfile_hash() {
     let data_home = temp_dir("run-locked-hash-data");
     let cache_home = temp_dir("run-locked-hash-cache");
     fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
-    fs::write(project.join("mods").join("example.jar"), b"abc")
-        .expect("failed to write local jar");
+    fs::write(project.join("mods").join("example.jar"), b"abc").expect("failed to write local jar");
     fs::write(
         project.join("modstage.toml"),
         r#"[project]
@@ -638,7 +679,10 @@ mods = [
     let resolve = run_in_with_env(
         &["resolve", "locked-hash-26.1.2"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         resolve.status.success(),
@@ -652,7 +696,10 @@ mods = [
     let run = run_in_with_env(
         &["run", "server", "locked-hash-26.1.2", "--locked"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -713,11 +760,8 @@ fn locked_run_rejects_minecraft_artifacts_that_no_longer_match_the_lockfile_hash
     )
     .expect("failed to write manifest");
     let fake_java = metadata.join("fake-java-locked-artifact");
-    fs::write(
-        &fake_java,
-        "#!/bin/sh\nprintf 'should not launch\\n'\n",
-    )
-    .expect("failed to write fake java");
+    fs::write(&fake_java, "#!/bin/sh\nprintf 'should not launch\\n'\n")
+        .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)
         .expect("fake java metadata should exist")
         .permissions();
@@ -770,7 +814,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -888,7 +935,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -913,13 +963,17 @@ sides = ["server"]
     let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
         .expect("fake java should record its launch args");
     assert!(
-        java_args.contains("-jar") && java_args.contains("server.jar") && java_args.contains("nogui"),
+        java_args.contains("-jar")
+            && java_args.contains("server.jar")
+            && java_args.contains("nogui"),
         "server launch should execute java -jar <server.jar> nogui\n{java_args}"
     );
 
     let reports_root = data_home.join("modstage").join("runs");
     let report_path = first_descendant_file(&reports_root, "run.toml");
-    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report_dir = report_path
+        .parent()
+        .expect("run report should have a parent");
     let report = fs::read_to_string(&report_path).expect("run report should be readable");
     for expected in [
         r#"instance = "server-exec-26.1.2""#,
@@ -1063,7 +1117,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -1092,7 +1149,9 @@ sides = ["server"]
 
     let reports_root = data_home.join("modstage").join("runs");
     let report_path = first_descendant_file(&reports_root, "run.toml");
-    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report_dir = report_path
+        .parent()
+        .expect("run report should have a parent");
     assert_eq!(
         fs::read_to_string(report_dir.join("scenario.toml"))
             .expect("scenario should be copied into the run record"),
@@ -1308,8 +1367,8 @@ sides = ["server"]
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    let lock = fs::read_to_string(project.join("modstage.lock"))
-        .expect("lockfile should be readable");
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("lockfile should be readable");
     assert!(
         lock.contains(r#"instance = "server-stale-lock-26.1.2""#),
         "run should replace the stale lockfile with the selected instance\n{lock}"
@@ -1419,7 +1478,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -1579,7 +1641,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -1714,7 +1779,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -1877,7 +1945,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -2020,7 +2091,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -2175,7 +2249,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -2212,12 +2289,39 @@ fn run_fabric_client_uses_loader_main_class_and_libraries() {
         .join("fabricmc")
         .join("intermediary")
         .join("26.1.2");
+    let common_lib_dir = repo
+        .join("com")
+        .join("example")
+        .join("common-lib")
+        .join("1.0.0");
+    let client_lib_dir = repo
+        .join("com")
+        .join("example")
+        .join("client-lib")
+        .join("1.0.0");
+    let server_lib_dir = repo
+        .join("com")
+        .join("example")
+        .join("server-lib")
+        .join("1.0.0");
     fs::create_dir_all(&loader_dir).expect("failed to create loader artifact dir");
     fs::create_dir_all(&intermediary_dir).expect("failed to create intermediary artifact dir");
+    fs::create_dir_all(&common_lib_dir).expect("failed to create common library dir");
+    fs::create_dir_all(&client_lib_dir).expect("failed to create client library dir");
+    fs::create_dir_all(&server_lib_dir).expect("failed to create server library dir");
     fs::write(loader_dir.join("fabric-loader-0.16.14.jar"), b"loader")
         .expect("failed to write loader jar");
-    fs::write(intermediary_dir.join("intermediary-26.1.2.jar"), b"intermediary")
-        .expect("failed to write intermediary jar");
+    fs::write(
+        intermediary_dir.join("intermediary-26.1.2.jar"),
+        b"intermediary",
+    )
+    .expect("failed to write intermediary jar");
+    fs::write(common_lib_dir.join("common-lib-1.0.0.jar"), b"common")
+        .expect("failed to write common library jar");
+    fs::write(client_lib_dir.join("client-lib-1.0.0.jar"), b"client lib")
+        .expect("failed to write client library jar");
+    fs::write(server_lib_dir.join("server-lib-1.0.0.jar"), b"server lib")
+        .expect("failed to write server library jar");
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
@@ -2261,12 +2365,33 @@ fn run_fabric_client_uses_loader_main_class_and_libraries() {
     "maven": "net.fabricmc:intermediary:26.1.2"
   },
   "launcherMeta": {
+    "libraries": {
+      "common": [
+        {
+          "name": "com.example:common-lib:1.0.0",
+          "url": "file://REPO"
+        }
+      ],
+      "client": [
+        {
+          "name": "com.example:client-lib:1.0.0",
+          "url": "file://REPO"
+        }
+      ],
+      "server": [
+        {
+          "name": "com.example:server-lib:1.0.0",
+          "url": "file://REPO"
+        }
+      ]
+    },
     "mainClass": {
       "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
       "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
     }
   }
-}]"#,
+}]"#
+        .replace("file://REPO", &format!("file://{}", repo.display())),
     )
     .expect("failed to write fabric metadata");
     let fake_java = metadata.join("fake-java-fabric-client");
@@ -2335,7 +2460,10 @@ sides = ["client"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -2356,9 +2484,12 @@ sides = ["client"]
             && java_args.contains("client.jar")
             && java_args.contains("fabric-loader-0.16.14.jar")
             && java_args.contains("intermediary-26.1.2.jar")
+            && java_args.contains("common-lib-1.0.0.jar")
+            && java_args.contains("client-lib-1.0.0.jar")
+            && !java_args.contains("server-lib-1.0.0.jar")
             && java_args.contains("net.fabricmc.loader.impl.launch.knot.KnotClient")
             && !java_args.contains("net.minecraft.client.main.Main"),
-        "Fabric client launch should use the loader main class and loader libraries\n{java_args}"
+        "Fabric client launch should use the side-specific loader main class and libraries\n{java_args}"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");
@@ -2490,7 +2621,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         run.status.success(),
@@ -2615,7 +2749,10 @@ sides = ["server"]
             "10ms",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -2630,7 +2767,9 @@ sides = ["server"]
 
     let reports_root = data_home.join("modstage").join("runs");
     let report_path = first_descendant_file(&reports_root, "run.toml");
-    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report_dir = report_path
+        .parent()
+        .expect("run report should have a parent");
     let report = fs::read_to_string(&report_path).expect("run report should be readable");
     for expected in [
         r#"instance = "server-timeout-26.1.2""#,
@@ -2748,7 +2887,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),
@@ -2757,7 +2899,9 @@ sides = ["server"]
 
     let reports_root = data_home.join("modstage").join("runs");
     let report_path = first_descendant_file(&reports_root, "run.toml");
-    let report_dir = report_path.parent().expect("run report should have a parent");
+    let report_dir = report_path
+        .parent()
+        .expect("run report should have a parent");
     let report = fs::read_to_string(&report_path).expect("run report should be readable");
     for expected in [
         r#"instance = "server-artifacts-26.1.2""#,
@@ -2883,7 +3027,10 @@ sides = ["server"]
             "5s",
         ],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         !run.status.success(),

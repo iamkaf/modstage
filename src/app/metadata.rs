@@ -43,8 +43,15 @@ pub(super) struct LoaderMetadata {
     pub(super) loader_maven: Option<String>,
     pub(super) intermediary_maven: Option<String>,
     pub(super) installer_maven: Option<String>,
+    pub(super) libraries: Vec<LoaderLibrary>,
     pub(super) client_main_class: String,
     pub(super) server_main_class: String,
+}
+
+pub(super) struct LoaderLibrary {
+    pub(super) side: String,
+    pub(super) name: String,
+    pub(super) url: String,
 }
 
 pub(super) struct ModrinthMod {
@@ -80,7 +87,10 @@ pub(super) fn resolve_modrinth_mod(
     let metadata_path = fetch_to_cache(
         &metadata_url,
         &cache_dir,
-        &format!("{}-{}-{}.json", source.project, instance.minecraft, instance.loader),
+        &format!(
+            "{}-{}-{}.json",
+            source.project, instance.minecraft, instance.loader
+        ),
     )?;
     let metadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
@@ -91,27 +101,51 @@ pub(super) fn resolve_modrinth_mod(
                 source.project
             )
         } else {
-            format!("Modrinth project `{}` did not include any versions", source.project)
+            format!(
+                "Modrinth project `{}` did not include any versions",
+                source.project
+            )
         }
     })?;
     let file_metadata = primary_modrinth_file(&metadata)
         .filter(|_| source.version.is_none())
         .or_else(|| primary_modrinth_file(version_metadata))
-        .ok_or_else(|| format!("Modrinth project `{}` did not include a primary file", source.project))?;
-    let filename = json_string(file_metadata, "filename")
-        .ok_or_else(|| format!("Modrinth project `{}` primary file had no filename", source.project))?;
-    let url = json_string(file_metadata, "url")
-        .ok_or_else(|| format!("Modrinth project `{}` primary file had no URL", source.project))?;
+        .ok_or_else(|| {
+            format!(
+                "Modrinth project `{}` did not include a primary file",
+                source.project
+            )
+        })?;
+    let filename = json_string(file_metadata, "filename").ok_or_else(|| {
+        format!(
+            "Modrinth project `{}` primary file had no filename",
+            source.project
+        )
+    })?;
+    let url = json_string(file_metadata, "url").ok_or_else(|| {
+        format!(
+            "Modrinth project `{}` primary file had no URL",
+            source.project
+        )
+    })?;
     let path = fetch_to_cache(&url, &cache_dir, &filename)?;
     let bytes = fs::read(&path)
         .map_err(|error| format!("failed to read Modrinth file {}: {error}", path.display()))?;
 
     Ok(ModrinthMod {
         project: source.project.to_string(),
-        version_id: json_string(version_metadata, "id")
-            .ok_or_else(|| format!("Modrinth project `{}` metadata had no version id", source.project))?,
-        version_number: json_string(version_metadata, "version_number")
-            .ok_or_else(|| format!("Modrinth project `{}` metadata had no version number", source.project))?,
+        version_id: json_string(version_metadata, "id").ok_or_else(|| {
+            format!(
+                "Modrinth project `{}` metadata had no version id",
+                source.project
+            )
+        })?,
+        version_number: json_string(version_metadata, "version_number").ok_or_else(|| {
+            format!(
+                "Modrinth project `{}` metadata had no version number",
+                source.project
+            )
+        })?,
         filename,
         url,
         path,
@@ -209,17 +243,24 @@ pub(super) fn resolve_fabric_loader_metadata(
 
     Ok(Some(LoaderMetadata {
         kind: "fabric".to_string(),
-        version: json_string(&metadata, "version")
-            .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
+        version: json_string(&metadata, "version").unwrap_or_else(|| {
+            instance
+                .loader_version
+                .clone()
+                .unwrap_or_else(|| "latest".to_string())
+        }),
         loader_maven: Some(
-            json_object_string(&metadata, "loader", "maven")
-                .ok_or_else(|| "Fabric metadata did not include loader maven coordinate".to_string())?,
+            json_object_string(&metadata, "loader", "maven").ok_or_else(|| {
+                "Fabric metadata did not include loader maven coordinate".to_string()
+            })?,
         ),
         intermediary_maven: Some(
-            json_object_string(&metadata, "intermediary", "maven")
-                .ok_or_else(|| "Fabric metadata did not include intermediary maven coordinate".to_string())?,
+            json_object_string(&metadata, "intermediary", "maven").ok_or_else(|| {
+                "Fabric metadata did not include intermediary maven coordinate".to_string()
+            })?,
         ),
         installer_maven: None,
+        libraries: fabric_launcher_libraries(&metadata),
         client_main_class: json_object_string(&metadata, "mainClass", "client")
             .ok_or_else(|| "Fabric metadata did not include client main class".to_string())?,
         server_main_class: json_object_string(&metadata, "mainClass", "server")
@@ -248,14 +289,18 @@ pub(super) fn resolve_installer_loader_metadata(
 
     Ok(Some(LoaderMetadata {
         kind: loader.to_string(),
-        version: json_string(&metadata, "version")
-            .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
+        version: json_string(&metadata, "version").unwrap_or_else(|| {
+            instance
+                .loader_version
+                .clone()
+                .unwrap_or_else(|| "latest".to_string())
+        }),
         loader_maven: None,
         intermediary_maven: None,
-        installer_maven: Some(
-            json_string(&metadata, "installer_maven")
-                .ok_or_else(|| format!("{loader} metadata did not include installer maven coordinate"))?,
-        ),
+        installer_maven: Some(json_string(&metadata, "installer_maven").ok_or_else(|| {
+            format!("{loader} metadata did not include installer maven coordinate")
+        })?),
+        libraries: Vec::new(),
         client_main_class: json_string(&metadata, "client_main_class")
             .ok_or_else(|| format!("{loader} metadata did not include client main class"))?,
         server_main_class: json_string(&metadata, "server_main_class")
@@ -272,9 +317,12 @@ pub(super) fn loader_metadata_text(
 ) -> Result<String, String> {
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let cache_dir = dirs.cache.join("downloads").join(loader);
-    let path = fetch_to_cache(url, &cache_dir, &format!("{}-loader.json", instance.minecraft))?;
-    fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))
+    let path = fetch_to_cache(
+        url,
+        &cache_dir,
+        &format!("{}-loader.json", instance.minecraft),
+    )?;
+    fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))
 }
 
 pub(super) fn fabric_meta_url(instance: &Instance) -> String {
@@ -294,6 +342,85 @@ pub(super) fn fabric_meta_url(instance: &Instance) -> String {
             instance.minecraft
         ),
     }
+}
+
+pub(super) fn fabric_launcher_libraries(metadata: &str) -> Vec<LoaderLibrary> {
+    let mut libraries = Vec::new();
+
+    for side in ["common", "client", "server"] {
+        let Some(section) = launcher_libraries_section(metadata, side) else {
+            continue;
+        };
+
+        for block in json_object_blocks(section) {
+            let Some(name) = json_string(block, "name") else {
+                continue;
+            };
+            let Some(url) = json_string(block, "url") else {
+                continue;
+            };
+            libraries.push(LoaderLibrary {
+                side: side.to_string(),
+                name,
+                url,
+            });
+        }
+    }
+
+    libraries
+}
+
+pub(super) fn launcher_libraries_section<'a>(metadata: &'a str, side: &str) -> Option<&'a str> {
+    let libraries_start = metadata.find("\"libraries\"")?;
+    let libraries = &metadata[libraries_start..];
+    let side_start = libraries.find(&format!("\"{side}\""))?;
+    let side_text = &libraries[side_start..];
+    let array_start = side_text.find('[')?;
+    let array = &side_text[array_start + 1..];
+    let mut depth = 1_i32;
+
+    for (index, character) in array.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&array[..index]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+pub(super) fn json_object_blocks(text: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut start = None;
+    let mut depth = 0_i32;
+
+    for (index, character) in text.char_indices() {
+        match character {
+            '{' => {
+                if depth == 0 {
+                    start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0
+                    && let Some(start) = start.take()
+                {
+                    blocks.push(&text[start..=index]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    blocks
 }
 
 pub(super) fn installer_loader_meta_url(loader: &str) -> Option<String> {
@@ -321,22 +448,45 @@ pub(super) fn resolve_minecraft_metadata(
     let manifest_text = String::from_utf8_lossy(&manifest);
     let Some(version_url) = manifest_version_url(&manifest_text, &instance.minecraft) else {
         if manifest_is_override {
-            return Err(format!("Minecraft version `{}` not found in manifest", instance.minecraft));
+            return Err(format!(
+                "Minecraft version `{}` not found in manifest",
+                instance.minecraft
+            ));
         }
 
         return Ok(None);
     };
-    let version_path = fetch_to_cache(&version_url, &cache_dir, &format!("{}.json", instance.minecraft))?;
+    let version_path = fetch_to_cache(
+        &version_url,
+        &cache_dir,
+        &format!("{}.json", instance.minecraft),
+    )?;
     let version = fs::read(&version_path)
         .map_err(|error| format!("failed to read {}: {error}", version_path.display()))?;
     let version_text = String::from_utf8_lossy(&version);
     let java_major = json_u32(&version_text, "majorVersion").unwrap_or(8);
-    let client_url = json_object_string(&version_text, "client", "url")
-        .ok_or_else(|| format!("Minecraft version `{}` has no client download URL", instance.minecraft))?;
-    let server_url = json_object_string(&version_text, "server", "url")
-        .ok_or_else(|| format!("Minecraft version `{}` has no server download URL", instance.minecraft))?;
-    let client_path = fetch_to_cache(&client_url, &cache_dir, &format!("{}-client.jar", instance.minecraft))?;
-    let server_path = fetch_to_cache(&server_url, &cache_dir, &format!("{}-server.jar", instance.minecraft))?;
+    let client_url = json_object_string(&version_text, "client", "url").ok_or_else(|| {
+        format!(
+            "Minecraft version `{}` has no client download URL",
+            instance.minecraft
+        )
+    })?;
+    let server_url = json_object_string(&version_text, "server", "url").ok_or_else(|| {
+        format!(
+            "Minecraft version `{}` has no server download URL",
+            instance.minecraft
+        )
+    })?;
+    let client_path = fetch_to_cache(
+        &client_url,
+        &cache_dir,
+        &format!("{}-client.jar", instance.minecraft),
+    )?;
+    let server_path = fetch_to_cache(
+        &server_url,
+        &cache_dir,
+        &format!("{}-server.jar", instance.minecraft),
+    )?;
     let client = fs::read(&client_path)
         .map_err(|error| format!("failed to read {}: {error}", client_path.display()))?;
     let server = fs::read(&server_path)
@@ -360,7 +510,10 @@ pub(super) fn resolve_minecraft_metadata(
     }))
 }
 
-pub(super) fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> Result<Option<MinecraftAssets>, String> {
+pub(super) fn resolve_minecraft_assets(
+    version_text: &str,
+    cache_dir: &Path,
+) -> Result<Option<MinecraftAssets>, String> {
     let Some(asset_index) = json_object_after(version_text, "assetIndex") else {
         return Ok(None);
     };
@@ -371,7 +524,11 @@ pub(super) fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> 
         return Ok(None);
     };
 
-    let index_path = fetch_to_cache(&index_url, &cache_dir.join("assets").join("indexes"), &format!("{id}.json"))?;
+    let index_path = fetch_to_cache(
+        &index_url,
+        &cache_dir.join("assets").join("indexes"),
+        &format!("{id}.json"),
+    )?;
     let index = fs::read(&index_path)
         .map_err(|error| format!("failed to read {}: {error}", index_path.display()))?;
     let index_text = String::from_utf8_lossy(&index);
@@ -446,7 +603,10 @@ pub(super) fn asset_name(block: &str) -> Option<String> {
     Some(first[..end].to_string())
 }
 
-pub(super) fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<Vec<MinecraftLibrary>, String> {
+pub(super) fn resolve_minecraft_libraries(
+    version_text: &str,
+    cache_dir: &Path,
+) -> Result<Vec<MinecraftLibrary>, String> {
     let mut libraries = Vec::new();
 
     for block in minecraft_library_blocks(version_text) {
@@ -508,25 +668,38 @@ pub(super) fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&
 }
 
 pub(super) fn mojang_manifest_url() -> Option<String> {
-    Some(env::var("MODSTAGE_MOJANG_MANIFEST_URL").unwrap_or_else(|_| {
-        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".to_string()
-    }))
+    Some(
+        env::var("MODSTAGE_MOJANG_MANIFEST_URL").unwrap_or_else(|_| {
+            "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".to_string()
+        }),
+    )
 }
 
-pub(super) fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBuf, String> {
+pub(super) fn fetch_to_cache(
+    url: &str,
+    cache_dir: &Path,
+    file_name: &str,
+) -> Result<PathBuf, String> {
     fs::create_dir_all(cache_dir)
         .map_err(|error| format!("failed to create {}: {error}", cache_dir.display()))?;
     let destination = cache_dir.join(file_name);
 
     if let Some(path) = url.strip_prefix("file://") {
-        fs::copy(path, &destination)
-            .map_err(|error| format!("failed to copy {url} to {}: {error}", destination.display()))?;
+        fs::copy(path, &destination).map_err(|error| {
+            format!("failed to copy {url} to {}: {error}", destination.display())
+        })?;
         return Ok(destination);
     }
 
     if url.starts_with("https://") || url.starts_with("http://") {
         let status = Command::new("curl")
-            .args(["--fail", "--location", "--silent", "--show-error", "--output"])
+            .args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--output",
+            ])
             .arg(&destination)
             .arg(url)
             .status()

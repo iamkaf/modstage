@@ -132,6 +132,7 @@ pub(super) fn locked_java_major(root: &Path) -> Result<Option<u32>, String> {
 pub(super) fn fetch_locked_libraries(
     root: &Path,
     cache_dir: &Path,
+    side: &str,
 ) -> Result<Vec<PathBuf>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
@@ -142,6 +143,12 @@ pub(super) fn fetch_locked_libraries(
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
     let mut libraries = Vec::new();
     for block in lock.split("[[library]]").skip(1) {
+        if let Some(library_side) = block_string_value(block, "side")
+            && library_side != "common"
+            && library_side != side
+        {
+            continue;
+        }
         let file_name = block_string_value(block, "path")
             .and_then(|path| path.rsplit('/').next().map(str::to_string))
             .filter(|name| !name.is_empty())
@@ -192,7 +199,11 @@ pub(super) fn fetch_locked_assets(root: &Path, cache_dir: &Path) -> Result<PathB
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
     if let Some(index_url) = block_string_value(&lock, "index_url") {
         let id = block_string_value(&lock, "id").unwrap_or_else(|| "assets".to_string());
-        let index_path = fetch_to_cache(&index_url, &assets_dir.join("indexes"), &format!("{id}.json"))?;
+        let index_path = fetch_to_cache(
+            &index_url,
+            &assets_dir.join("indexes"),
+            &format!("{id}.json"),
+        )?;
         if let Some(expected) = block_string_value(&lock, "index_sha256") {
             verify_file_hash("locked asset index", &id, &index_path, &expected)?;
         }

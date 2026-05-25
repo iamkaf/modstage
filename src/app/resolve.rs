@@ -133,6 +133,20 @@ sides = [{}]\n",
                 lock.push_str(&entry);
             }
         }
+        for library in &loader.libraries {
+            let repository = vec![(
+                format!("{}-{}", loader.kind, library.side),
+                library.url.clone(),
+            )];
+            if let Some(entry) = resolved_maven_library_with_side(
+                &repository,
+                &maven_cache,
+                &library.name,
+                Some(&library.side),
+            )? {
+                lock.push_str(&entry);
+            }
+        }
         lock
     } else {
         lock
@@ -222,6 +236,15 @@ pub(super) fn resolved_maven_library(
     cache_dir: &Path,
     coordinate: &str,
 ) -> Result<Option<String>, String> {
+    resolved_maven_library_with_side(repositories, cache_dir, coordinate, None)
+}
+
+pub(super) fn resolved_maven_library_with_side(
+    repositories: &[(String, String)],
+    cache_dir: &Path,
+    coordinate: &str,
+    side: Option<&str>,
+) -> Result<Option<String>, String> {
     let Some(coordinates) = MavenCoordinates::parse_coordinate(coordinate) else {
         return Ok(None);
     };
@@ -241,12 +264,16 @@ pub(super) fn resolved_maven_library(
         .url
         .map(|url| format!("url = \"{url}\"\n"))
         .unwrap_or_default();
+    let side = side
+        .map(|side| format!("side = \"{side}\"\n"))
+        .unwrap_or_default();
 
     Ok(Some(format!(
-        "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\n{}path = \"{}\"\nsha256 = \"{}\"\n",
+        "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\n{}{}path = \"{}\"\nsha256 = \"{}\"\n",
         coordinate,
         artifact.repository,
         url,
+        side,
         path.display(),
         sha256_hex(&bytes)
     )))

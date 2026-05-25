@@ -21,7 +21,11 @@ pub(super) fn launch_minecraft_instance(
     let mut launch_args = Vec::new();
     if let Some(main_class) = locked_main_class(root, side)? {
         let mut classpath = vec![artifact.clone()];
-        classpath.extend(fetch_locked_libraries(root, &cache_dir.join("libraries"))?);
+        classpath.extend(fetch_locked_libraries(
+            root,
+            &cache_dir.join("libraries"),
+            side,
+        )?);
         let classpath = join_classpath(&classpath);
         command.arg("-cp").arg(&classpath).arg(&main_class);
         launch_args.push("-cp".to_string());
