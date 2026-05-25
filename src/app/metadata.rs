@@ -204,9 +204,7 @@ pub(super) fn resolve_fabric_loader_metadata(
     instance: &Instance,
     root: &Path,
 ) -> Result<Option<LoaderMetadata>, String> {
-    let Some(url) = fabric_meta_url() else {
-        return Ok(None);
-    };
+    let url = fabric_meta_url(instance);
     let metadata = loader_metadata_text(config, root, "fabric", &url, instance)?;
 
     Ok(Some(LoaderMetadata {
@@ -279,8 +277,23 @@ pub(super) fn loader_metadata_text(
         .map_err(|error| format!("failed to read {}: {error}", path.display()))
 }
 
-pub(super) fn fabric_meta_url() -> Option<String> {
-    env::var("MODSTAGE_FABRIC_META_URL").ok()
+pub(super) fn fabric_meta_url(instance: &Instance) -> String {
+    if let Ok(url) = env::var("MODSTAGE_FABRIC_META_URL") {
+        return url;
+    }
+
+    match instance.loader_version.as_deref() {
+        Some(version) if version != "latest" => {
+            format!(
+                "https://meta.fabricmc.net/v2/versions/loader/{}/{}",
+                instance.minecraft, version
+            )
+        }
+        _ => format!(
+            "https://meta.fabricmc.net/v2/versions/loader/{}",
+            instance.minecraft
+        ),
+    }
 }
 
 pub(super) fn installer_loader_meta_url(loader: &str) -> Option<String> {
