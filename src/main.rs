@@ -619,24 +619,28 @@ fn fetch_to_cache(url: &str, cache_dir: &Path, file_name: &str) -> Result<PathBu
 }
 
 fn manifest_version_url(manifest: &str, version: &str) -> Option<String> {
-    let needle = format!("\"id\":\"{version}\"");
-    let start = manifest.find(&needle)?;
-    let after_version = &manifest[start..];
+    let id_key = manifest.find(&format!("\"{version}\""))?;
+    let before_id = &manifest[..id_key];
+    let id_field = before_id.rfind("\"id\"")?;
+    let after_version = &manifest[id_field..];
     json_string(after_version, "url")
 }
 
 fn json_string(text: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\":\"");
-    let start = text.find(&needle)? + needle.len();
-    let rest = &text[start..];
+    let key_start = text.find(&format!("\"{key}\""))?;
+    let after_key = &text[key_start + key.len() + 2..];
+    let colon = after_key.find(':')?;
+    let rest = after_key[colon + 1..].trim_start();
+    let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
 }
 
 fn json_u32(text: &str, key: &str) -> Option<u32> {
-    let needle = format!("\"{key}\":");
-    let start = text.find(&needle)? + needle.len();
-    let rest = text[start..].trim_start();
+    let key_start = text.find(&format!("\"{key}\""))?;
+    let after_key = &text[key_start + key.len() + 2..];
+    let colon = after_key.find(':')?;
+    let rest = after_key[colon + 1..].trim_start();
     let end = rest
         .find(|character: char| !character.is_ascii_digit())
         .unwrap_or(rest.len());

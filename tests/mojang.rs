@@ -47,7 +47,7 @@ fn resolve_fetches_and_records_mojang_version_metadata() {
     fs::write(
         &manifest,
         format!(
-            r#"{{"versions":[{{"id":"26.1.2","url":"file://{}"}}]}}"#,
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
             version_json.display()
         ),
     )
