@@ -610,6 +610,72 @@ mods = [
 }
 
 #[test]
+fn locked_run_rejects_mods_that_no_longer_match_the_lockfile_hash() {
+    let project = temp_dir("run-locked-hash-project");
+    let data_home = temp_dir("run-locked-hash-data");
+    let cache_home = temp_dir("run-locked-hash-cache");
+    fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
+    fs::write(project.join("mods").join("example.jar"), b"abc")
+        .expect("failed to write local jar");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-locked-hash"
+
+[[instance]]
+name = "locked-hash-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["server"]
+mods = [
+  "./mods/example.jar",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let resolve = run_in_with_env(
+        &["resolve", "locked-hash-26.1.2"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    fs::write(project.join("mods").join("example.jar"), b"changed")
+        .expect("failed to mutate local jar after resolve");
+
+    let run = run_in_with_env(
+        &["run", "server", "locked-hash-26.1.2", "--locked"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        !run.status.success(),
+        "locked run should fail when a mod hash no longer matches"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("hash mismatch") && stderr.contains("./mods/example.jar"),
+        "locked run should explain the mismatched mod hash\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        stderr
+    );
+    assert!(
+        !data_home.join("modstage").join("instances").exists(),
+        "locked hash mismatch must not stage instance state"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
 #[cfg(unix)]
 fn run_server_executes_resolved_minecraft_artifact_with_configured_java() {
     let project = temp_dir("run-exec-project");

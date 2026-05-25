@@ -33,6 +33,9 @@ pub(super) fn run_instance(
     if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
         resolve_instance(Some(config_path.clone()), Some(selected))?;
     }
+    if options.locked {
+        verify_locked_mod_hashes(root, instance)?;
+    }
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let game_dir = dirs
         .data
@@ -710,6 +713,47 @@ pub(super) fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<Path
         return Ok(maven_artifact(&[], &coordinates)
             .map(|(_, path)| path)
             .and_then(|path| path.canonicalize().ok()));
+    }
+
+    Ok(None)
+}
+
+pub(super) fn verify_locked_mod_hashes(root: &Path, instance: &Instance) -> Result<(), String> {
+    for source in &instance.mods {
+        let Some((path, expected)) = locked_mod_path_and_hash(root, source)? else {
+            continue;
+        };
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("failed to read locked mod {}: {error}", path.display()))?;
+        let actual = sha256_hex(&bytes);
+        if actual != expected {
+            return Err(format!(
+                "locked mod `{source}` hash mismatch: expected {expected}, got {actual}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn locked_mod_path_and_hash(
+    root: &Path,
+    source: &str,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let lock_path = root.join("modstage.lock");
+    if !lock_path.is_file() {
+        return Ok(None);
+    }
+
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    for block in lock.split("[[mod]]").skip(1) {
+        if block_string_value(block, "source").as_deref() == Some(source)
+            && let Some(path) = block_string_value(block, "path")
+            && let Some(sha256) = block_string_value(block, "sha256")
+        {
+            return Ok(Some((PathBuf::from(path), sha256)));
+        }
     }
 
     Ok(None)
