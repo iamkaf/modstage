@@ -1431,6 +1431,21 @@ sides = ["client"]
         String::from_utf8_lossy(&run.stdout).contains("fake client stdout"),
         "run should stream client stdout"
     );
+    let run_stdout = String::from_utf8_lossy(&run.stdout);
+    for expected in [
+        "run summary:",
+        r#"instance = "client-exec-26.1.2""#,
+        r#"side = "client""#,
+        r#"minecraft = "26.1.2""#,
+        r#"loader = "vanilla""#,
+        "exit_code = 0",
+        "report = ",
+    ] {
+        assert!(
+            run_stdout.contains(expected),
+            "run stdout should contain final summary field {expected:?}\n{run_stdout}"
+        );
+    }
 
     let state_root = data_home.join("modstage").join("instances");
     let game_dir = first_child(&state_root)

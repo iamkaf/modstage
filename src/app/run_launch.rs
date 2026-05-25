@@ -84,8 +84,9 @@ pub(super) fn launch_minecraft_instance(
     let success = output.status.success() && !timed_out;
     let artifacts = collect_run_artifacts(game_dir, run_dir)?;
     let failure_class = classify_failure(success, timed_out, &artifacts)?;
+    let report_path = run_dir.join("run.toml");
     fs::write(
-        run_dir.join("run.toml"),
+        &report_path,
         format!(
             "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\nlaunch_plan = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
             instance.name,
@@ -124,12 +125,51 @@ pub(super) fn launch_minecraft_instance(
         ),
     )
     .map_err(|error| format!("failed to write run report: {error}"))?;
+    print_run_summary(
+        instance,
+        side,
+        success,
+        exit_code,
+        timed_out,
+        failure_class,
+        &report_path,
+    );
 
     Ok(RunResult {
         success,
         exit_code,
         timed_out,
     })
+}
+
+pub(super) fn print_run_summary(
+    instance: &Instance,
+    side: &str,
+    success: bool,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    failure_class: &str,
+    report_path: &Path,
+) {
+    println!("run summary:");
+    println!("instance = \"{}\"", instance.name);
+    println!("side = \"{side}\"");
+    println!("minecraft = \"{}\"", instance.minecraft);
+    println!("loader = \"{}\"", instance.loader);
+    println!(
+        "status = \"{}\"",
+        if timed_out {
+            "timed_out"
+        } else if success {
+            "passed"
+        } else {
+            "failed"
+        }
+    );
+    println!("exit_code = {}", exit_code.unwrap_or(-1));
+    println!("timed_out = {timed_out}");
+    println!("failure_class = \"{failure_class}\"");
+    println!("report = \"{}\"", report_path.display());
 }
 
 pub(super) fn selected_java(root: &Path, options: &RunOptions) -> Result<PathBuf, String> {
