@@ -25,10 +25,7 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
@@ -56,7 +53,10 @@ sides = ["client", "server"]
     let output = run_in_with_env(
         &["inspect", "config"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         output.status.success(),
@@ -109,7 +109,10 @@ sides = ["client", "server"]
     let output = run_in_with_env(
         &["clean", "cache"],
         &project,
-        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
     );
     assert!(
         output.status.success(),

@@ -100,8 +100,12 @@ pub(super) fn run_server_process_with_timeout(
         Some(event_sender),
         ProcessStream::Stdout,
     );
-    let stderr_thread =
-        spawn_process_reader(stderr, Arc::clone(&stderr_buffer), None, ProcessStream::Stderr);
+    let stderr_thread = spawn_process_reader(
+        stderr,
+        Arc::clone(&stderr_buffer),
+        None,
+        ProcessStream::Stderr,
+    );
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
     let mut sent_stop = false;
 
@@ -182,6 +186,109 @@ pub(super) fn run_server_process_with_timeout(
     }
 }
 
+pub(super) fn run_client_process_with_timeout(
+    command: &mut Command,
+    timeout: Option<Duration>,
+) -> Result<TimedOutput, String> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("process spawn failed: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture process stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to capture process stderr".to_string())?;
+    let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+    let (event_sender, event_receiver) = mpsc::channel();
+    let stdout_thread = spawn_process_reader(
+        stdout,
+        Arc::clone(&stdout_buffer),
+        Some(event_sender),
+        ProcessStream::Stdout,
+    );
+    let stderr_thread = spawn_process_reader(
+        stderr,
+        Arc::clone(&stderr_buffer),
+        None,
+        ProcessStream::Stderr,
+    );
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("process wait failed: {error}"))?
+        {
+            stdout_thread
+                .join()
+                .map_err(|_| "stdout reader thread panicked".to_string())?;
+            stderr_thread
+                .join()
+                .map_err(|_| "stderr reader thread panicked".to_string())?;
+            return Ok(TimedOutput {
+                status,
+                stdout: clone_buffer(&stdout_buffer)?,
+                stderr: clone_buffer(&stderr_buffer)?,
+                timed_out: false,
+                streamed: true,
+                graceful_stop: false,
+            });
+        }
+
+        for event in event_receiver.try_iter() {
+            if matches!(event, ProcessEvent::ClientReady) {
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .map_err(|error| format!("process wait failed: {error}"))?;
+                stdout_thread
+                    .join()
+                    .map_err(|_| "stdout reader thread panicked".to_string())?;
+                stderr_thread
+                    .join()
+                    .map_err(|_| "stderr reader thread panicked".to_string())?;
+                return Ok(TimedOutput {
+                    status,
+                    stdout: clone_buffer(&stdout_buffer)?,
+                    stderr: clone_buffer(&stderr_buffer)?,
+                    timed_out: false,
+                    streamed: true,
+                    graceful_stop: true,
+                });
+            }
+        }
+
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .map_err(|error| format!("process wait failed: {error}"))?;
+            stdout_thread
+                .join()
+                .map_err(|_| "stdout reader thread panicked".to_string())?;
+            stderr_thread
+                .join()
+                .map_err(|_| "stderr reader thread panicked".to_string())?;
+            return Ok(TimedOutput {
+                status,
+                stdout: clone_buffer(&stdout_buffer)?,
+                stderr: clone_buffer(&stderr_buffer)?,
+                timed_out: true,
+                streamed: true,
+                graceful_stop: false,
+            });
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 enum ProcessStream {
     Stdout,
     Stderr,
@@ -189,6 +296,7 @@ enum ProcessStream {
 
 enum ProcessEvent {
     Ready,
+    ClientReady,
     ShutdownComplete,
 }
 
@@ -234,6 +342,9 @@ where
                 let text = String::from_utf8_lossy(&line);
                 if text.contains("Done (") && text.contains("For help, type") {
                     let _ = sender.send(ProcessEvent::Ready);
+                }
+                if text.contains("TeaKit listening on ") {
+                    let _ = sender.send(ProcessEvent::ClientReady);
                 }
                 if text.contains("Stopping server") || text.contains("Stopping the server") {
                     saw_stopping = true;

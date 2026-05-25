@@ -40,13 +40,9 @@ fn temp_project(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX_EPOCH")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "modstage-{name}-{}-{nanos}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("modstage-{name}-{}-{nanos}", std::process::id()));
 
-    fs::create_dir_all(root.join("nested").join("deeper"))
-        .expect("failed to create temp project");
+    fs::create_dir_all(root.join("nested").join("deeper")).expect("failed to create temp project");
     fs::write(
         root.join("modstage.toml"),
         r#"[project]

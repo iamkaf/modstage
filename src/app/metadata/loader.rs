@@ -168,7 +168,10 @@ pub(in crate::app) fn fabric_launcher_libraries(metadata: &str) -> Vec<LoaderLib
     libraries
 }
 
-pub(in crate::app) fn launcher_libraries_section<'a>(metadata: &'a str, side: &str) -> Option<&'a str> {
+pub(in crate::app) fn launcher_libraries_section<'a>(
+    metadata: &'a str,
+    side: &str,
+) -> Option<&'a str> {
     let libraries_start = metadata.find("\"libraries\"")?;
     let libraries = &metadata[libraries_start..];
     let side_start = libraries.find(&format!("\"{side}\""))?;

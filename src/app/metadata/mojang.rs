@@ -34,7 +34,6 @@ pub(in crate::app) struct MinecraftAsset {
     pub(in crate::app) hash: String,
     pub(in crate::app) size: u32,
     pub(in crate::app) url: String,
-    pub(in crate::app) sha256: String,
 }
 
 pub(in crate::app) fn resolve_minecraft_metadata(
@@ -148,19 +147,13 @@ pub(in crate::app) fn resolve_minecraft_assets(
             continue;
         };
         let size = json_u32(block, "size").unwrap_or(0);
-        let Some(url) = json_string(block, "url") else {
-            continue;
-        };
-        let object_path = fetch_to_cache(&url, &asset_object_dir(cache_dir, &hash), &hash)?;
-        let bytes = fs::read(&object_path)
-            .map_err(|error| format!("failed to read {}: {error}", object_path.display()))?;
+        let url = json_string(block, "url").unwrap_or_else(|| minecraft_asset_url(&hash));
 
         objects.push(MinecraftAsset {
             name,
             hash,
             size,
             url,
-            sha256: sha256_hex(&bytes),
         });
     }
 
@@ -175,6 +168,15 @@ pub(in crate::app) fn resolve_minecraft_assets(
 pub(in crate::app) fn asset_object_dir(cache_dir: &Path, hash: &str) -> PathBuf {
     let prefix = hash.get(..2).unwrap_or(hash);
     cache_dir.join("assets").join("objects").join(prefix)
+}
+
+pub(in crate::app) fn minecraft_asset_url(hash: &str) -> String {
+    let base = std::env::var("MODSTAGE_MOJANG_ASSET_BASE_URL")
+        .unwrap_or_else(|_| "https://resources.download.minecraft.net".to_string());
+    let base = base.trim_end_matches('/');
+    let prefix = hash.get(..2).unwrap_or(hash);
+
+    format!("{base}/{prefix}/{hash}")
 }
 
 pub(in crate::app) fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {

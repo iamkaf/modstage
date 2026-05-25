@@ -7,7 +7,7 @@
 <h1 align="center">Modstage</h1>
 
 <p align="center">
-  <strong>A dependency-free Rust CLI that stages and launches real Minecraft mod environments from reproducible config.</strong>
+  <strong>A dependency-free Rust CLI for proving published Minecraft mod jars in real launcher-shaped environments.</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 ---
 
-Modstage is a headless Minecraft launcher for mod development. It replaces GUI launcher state and Gradle run configs with `modstage.toml`, a generated TOML lockfile, durable instance directories, full process logs, and run reports.
+Modstage is a headless launcher for Minecraft mod development. It replaces GUI launcher state and Gradle run configs with `modstage.toml`, a generated TOML lockfile, durable instance directories, full process logs, and run reports.
 
 It answers one question: do these published or Maven-local mod jars work together in the same kind of client or server environment users actually run?
 
@@ -29,12 +29,13 @@ It answers one question: do these published or Maven-local mod jars work togethe
 modstage.toml
   -> resolve Mojang + loader + mod artifacts
   -> write modstage.lock
+  -> restore locked libraries/assets on demand
   -> reconcile instance mods/
   -> launch real client or server Java process
   -> save stdout, stderr, Minecraft logs, crash reports, and launch plan
 ```
 
-Modstage does not fake Minecraft. The launcher is headless; the game process is real.
+Modstage does not fake Minecraft. The launcher is headless; the game process is real. Client runs can be bounded by TeaKit readiness, and server runs are bounded by the standard ready/stop lifecycle.
 
 ## Quick Start
 
@@ -51,6 +52,8 @@ For the current validation target:
 cargo run -- --config /home/kaf/code/mods/liteminer/modstage.toml resolve
 cargo run -- --config /home/kaf/code/mods/liteminer/modstage.toml run server liteminer-fabric-26.1.2 --locked --timeout 120s
 ```
+
+Install or alias the binary as `modstage` to use the same commands shown in project docs and CI notes.
 
 ## Configuration
 
@@ -118,7 +121,7 @@ Every launch writes a run directory under the project-scoped data root. Reports 
 | `latest.log` | Copied Minecraft log when present |
 | `crash-reports/*` | Copied crash report when Minecraft produces one |
 
-Server runs watch for the standard Minecraft ready line, send `stop`, and accept a confirmed shutdown as a bounded pass. Client runs launch the real graphical client; in a non-display environment they should fail with a captured crash report or early display error.
+Server runs watch for the standard Minecraft ready line, send `stop`, and accept a confirmed shutdown as a bounded pass. Client runs launch the real graphical client. When TeaKit is present, Modstage treats the TeaKit readiness log as the bounded success point and stops the process.
 
 ## State Layout
 
@@ -148,12 +151,22 @@ Observed local matrix status:
 
 | Command | Result |
 | --- | --- |
+| `resolve` | Generated TOML lockfile with Mojang metadata, loader artifacts, libraries, assets, Modrinth mods, Maven mods, and local jars |
+| `run client liteminer-fabric-26.1.2 --locked --timeout 120s` | Passed after TeaKit readiness |
 | `run server liteminer-fabric-26.1.2 --locked --timeout 120s` | Passed after ready/stop shutdown |
+| `run client liteminer-forge-26.1.2 --locked --timeout 120s` | Passed after Forge client processor staging and TeaKit readiness |
 | `run server liteminer-forge-26.1.2 --locked --timeout 120s` | Passed through Forge installer argfiles |
+| `run client liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed after NeoForge patched-client staging and TeaKit readiness |
 | `run server liteminer-neoforge-26.1.2 --locked --timeout 120s` | Passed through NeoForge installer argfiles |
-| `run client liteminer-fabric-26.1.2 --locked --timeout 120s` | Launched real client; failed with GLFW/X11 crash report in this environment |
-| `run client liteminer-forge-26.1.2 --locked --timeout 120s` | Launched real client; failed at Forge early display in this environment |
-| `run client liteminer-neoforge-26.1.2 --locked --timeout 120s` | Launched real client; failed at NeoForge early display in this environment |
+
+Forge and NeoForge client setup follows the same broad launcher model used by the Modrinth app: read the installer profile, resolve processor classpaths, expand launcher data placeholders, run the client processor, then launch with the resolved libraries and game arguments.
+
+Local reference files:
+
+| Reference | Purpose |
+| --- | --- |
+| `/home/kaf/code/oss/code/packages/app-lib/src/launcher/mod.rs` | Launcher processor/data model |
+| `/home/kaf/code/oss/code/packages/app-lib/src/launcher/args.rs` | Launcher argument and placeholder handling |
 
 ## CI And Releases
 

@@ -23,7 +23,10 @@ pub(super) fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), Str
     Ok(())
 }
 
-pub(super) fn inspect_lock(explicit_config: Option<PathBuf>, instance: Option<&str>) -> Result<(), String> {
+pub(super) fn inspect_lock(
+    explicit_config: Option<PathBuf>,
+    instance: Option<&str>,
+) -> Result<(), String> {
     let config_path = config_path(explicit_config)?;
     let root = config_path.parent().unwrap_or_else(|| Path::new("."));
     let lock_path = root.join("modstage.lock");
@@ -88,7 +91,10 @@ pub(super) fn inspect_instance(
     }
 }
 
-pub(super) fn print_instance_summary(instance_name: &str, instance_dir: &Path) -> Result<(), String> {
+pub(super) fn print_instance_summary(
+    instance_name: &str,
+    instance_dir: &Path,
+) -> Result<(), String> {
     if !instance_dir.exists() {
         return Err(format!(
             "instance `{instance_name}` has no staged state at {}",
@@ -117,7 +123,11 @@ pub(super) fn print_instance_summary(instance_name: &str, instance_dir: &Path) -
     Ok(())
 }
 
-pub(super) fn print_instance_side(instance_name: &str, side: &str, side_dir: &Path) -> Result<(), String> {
+pub(super) fn print_instance_side(
+    instance_name: &str,
+    side: &str,
+    side_dir: &Path,
+) -> Result<(), String> {
     let game_dir = side_dir.join("game");
     if !game_dir.is_dir() {
         return Err(format!(
@@ -133,7 +143,10 @@ pub(super) fn print_instance_side(instance_name: &str, side: &str, side_dir: &Pa
             .map_err(|error| format!("failed to read {}: {error}", mods_dir.display()))?
         {
             let entry = entry.map_err(|error| error.to_string())?;
-            if entry.file_type().map_err(|error| error.to_string())?.is_file()
+            if entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_file()
                 && let Some(name) = entry.file_name().to_str()
             {
                 mods.push(name.to_string());

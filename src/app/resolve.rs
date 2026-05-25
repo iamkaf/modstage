@@ -128,8 +128,8 @@ sides = [{}]\n",
             ));
             for asset in assets.objects {
                 lock.push_str(&format!(
-                    "\n[[asset]]\nname = \"{}\"\nhash = \"{}\"\nsize = {}\nurl = \"{}\"\nsha256 = \"{}\"\n",
-                    asset.name, asset.hash, asset.size, asset.url, asset.sha256
+                    "\n[[asset]]\nname = \"{}\"\nhash = \"{}\"\nsize = {}\nurl = \"{}\"\n",
+                    asset.name, asset.hash, asset.size, asset.url
                 ));
             }
         }
@@ -309,8 +309,10 @@ pub(super) fn resolved_maven_library_with_side(
     coordinate: &str,
     side: Option<&str>,
 ) -> Result<Option<String>, String> {
-    Ok(resolved_maven_library_artifact(repositories, cache_dir, coordinate, side)?
-        .map(|resolved| resolved.entry))
+    Ok(
+        resolved_maven_library_artifact(repositories, cache_dir, coordinate, side)?
+            .map(|resolved| resolved.entry),
+    )
 }
 
 pub(super) struct ResolvedMavenLibrary {
@@ -349,13 +351,13 @@ pub(super) fn resolved_maven_library_artifact(
 
     Ok(Some(ResolvedMavenLibrary {
         entry: format!(
-        "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\n{}{}path = \"{}\"\nsha256 = \"{}\"\n",
-        coordinate,
-        artifact.repository,
-        url,
-        side,
-        path.display(),
-        sha256_hex(&bytes)
+            "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\n{}{}path = \"{}\"\nsha256 = \"{}\"\n",
+            coordinate,
+            artifact.repository,
+            url,
+            side,
+            path.display(),
+            sha256_hex(&bytes)
         ),
         path,
     }))

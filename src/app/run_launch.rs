@@ -35,10 +35,29 @@ pub(super) fn launch_minecraft_instance(
             launch_artifact = loader_server_artifact(&artifact, &cache_dir)?;
         }
         for arg in locked_arguments(root, &instance.name, "jvm")? {
+            let arg = expand_launch_argument(&arg, &cache_dir, game_dir);
             command.arg(&arg);
             launch_args.push(arg);
         }
         let mut classpath = vec![launch_artifact.clone()];
+        if side == "client"
+            && let Some(patched) = prepare_forge_client_artifact(
+                config,
+                instance,
+                root,
+                &dirs,
+                game_dir,
+                &java,
+                &launch_artifact,
+            )?
+        {
+            classpath.push(patched);
+        }
+        if side == "client"
+            && let Some(runtime) = neoforge_client_runtime(config, instance, &dirs)?
+        {
+            classpath.push(runtime);
+        }
         classpath.extend(fetch_locked_libraries(
             root,
             &instance.name,
@@ -50,12 +69,41 @@ pub(super) fn launch_minecraft_instance(
         launch_args.push("-cp".to_string());
         launch_args.push(classpath);
         launch_args.push(main_class);
-        let game_args =
-            launch_game_arguments(instance, side, locked_arguments(root, &instance.name, "game")?);
+        let game_args = launch_game_arguments(
+            instance,
+            side,
+            locked_arguments(root, &instance.name, "game")?,
+        )
+        .into_iter()
+        .map(|arg| expand_launch_argument(&arg, &cache_dir, game_dir))
+        .collect::<Vec<_>>();
         let has_nogui = game_args.iter().any(|arg| arg == "nogui");
         for arg in game_args {
             command.arg(&arg);
             launch_args.push(arg);
+        }
+        if side == "client" {
+            append_client_argument(
+                &mut command,
+                &mut launch_args,
+                "--version",
+                &instance.minecraft,
+            );
+            append_client_argument(&mut command, &mut launch_args, "--accessToken", "0");
+            append_client_argument(&mut command, &mut launch_args, "--username", "Player");
+            append_client_argument(
+                &mut command,
+                &mut launch_args,
+                "--uuid",
+                "00000000000000000000000000000000",
+            );
+            append_client_argument(&mut command, &mut launch_args, "--userType", "legacy");
+            append_client_argument(
+                &mut command,
+                &mut launch_args,
+                "--gameDir",
+                &game_dir.display().to_string(),
+            );
         }
         if side == "server" && !has_nogui {
             command.arg("nogui");
@@ -103,12 +151,15 @@ pub(super) fn launch_minecraft_instance(
     )?;
     command.current_dir(game_dir);
     let timeout = options.timeout_duration()?;
+    let run_started = SystemTime::now();
     let output = if side == "server" {
         run_server_process_with_timeout(&mut command, timeout)
+    } else if side == "client" {
+        run_client_process_with_timeout(&mut command, timeout)
     } else {
         run_process_with_timeout(&mut command, timeout)
     }
-        .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
+    .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
 
     if !output.streamed {
         print!("{}", String::from_utf8_lossy(&output.stdout));
@@ -123,7 +174,7 @@ pub(super) fn launch_minecraft_instance(
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
     let process_success = (output.status.success() || output.graceful_stop) && !timed_out;
-    let artifacts = collect_run_artifacts(game_dir, run_dir)?;
+    let artifacts = collect_run_artifacts(game_dir, run_dir, run_started)?;
     let failure_class = classify_failure(process_success, timed_out, &artifacts)?;
     let success = process_success && failure_class == "none";
     let report_path = run_dir.join("run.toml");
@@ -211,6 +262,31 @@ pub(super) fn loader_server_artifact(artifact: &Path, cache_dir: &Path) -> Resul
         .map_err(|error| format!("failed to write {}: {error}", destination.display()))?;
 
     Ok(destination)
+}
+
+fn expand_launch_argument(arg: &str, cache_dir: &Path, game_dir: &Path) -> String {
+    let classpath_separator = if cfg!(windows) { ";" } else { ":" };
+    arg.replace(
+        "${library_directory}",
+        &cache_dir.join("libraries").display().to_string(),
+    )
+    .replace("${game_directory}", &game_dir.display().to_string())
+    .replace("${classpath_separator}", classpath_separator)
+    .replace("${version_name}", "modstage")
+}
+
+fn append_client_argument(
+    command: &mut Command,
+    launch_args: &mut Vec<String>,
+    key: &str,
+    value: &str,
+) {
+    if launch_args.iter().any(|arg| arg == key) {
+        return;
+    }
+    command.arg(key).arg(value);
+    launch_args.push(key.to_string());
+    launch_args.push(value.to_string());
 }
 
 pub(super) fn print_run_summary(

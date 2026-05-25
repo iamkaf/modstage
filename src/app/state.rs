@@ -8,7 +8,11 @@ pub(super) struct StateDirs {
 
 impl StateDirs {
     pub(super) fn for_project(project_name: &str, root: &Path) -> Result<Self, String> {
-        let project_id = format!("{}-{:08x}", project_name, stable_hash(&root.display().to_string()));
+        let project_id = format!(
+            "{}-{:08x}",
+            project_name,
+            stable_hash(&root.display().to_string())
+        );
         let data = data_home()?.join("modstage");
         let cache = cache_home()?.join("modstage");
 

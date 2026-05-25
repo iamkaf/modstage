@@ -277,6 +277,7 @@ pub(super) fn fetch_locked_assets(
     }
 
     for block in lock.split("[[asset]]").skip(1) {
+        let block = block.find("\n[").map(|end| &block[..end]).unwrap_or(block);
         let Some(hash) = block_string_value(block, "hash") else {
             continue;
         };
@@ -284,13 +285,38 @@ pub(super) fn fetch_locked_assets(
             continue;
         };
         let name = block_string_value(block, "name").unwrap_or_else(|| hash.clone());
+        let object_path = asset_object_dir(cache_dir, &hash).join(&hash);
+        if object_path.exists()
+            && verify_file_sha1("locked asset", &name, &object_path, &hash).is_ok()
+        {
+            continue;
+        }
         let object_path = fetch_to_cache(&url, &asset_object_dir(cache_dir, &hash), &hash)?;
+        verify_file_sha1("locked asset", &name, &object_path, &hash)?;
         if let Some(expected) = block_string_value(block, "sha256") {
             verify_file_hash("locked asset", &name, &object_path, &expected)?;
         }
     }
 
     Ok(assets_dir)
+}
+
+pub(super) fn verify_file_sha1(
+    kind: &str,
+    name: &str,
+    path: &Path,
+    expected: &str,
+) -> Result<(), String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read {kind} {}: {error}", path.display()))?;
+    let actual = sha1_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "{kind} `{name}` hash mismatch: expected {expected}, got {actual}"
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn verify_file_hash(

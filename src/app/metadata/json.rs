@@ -41,7 +41,11 @@ pub(in crate::app) fn json_string(text: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-pub(in crate::app) fn json_object_string(text: &str, object_key: &str, value_key: &str) -> Option<String> {
+pub(in crate::app) fn json_object_string(
+    text: &str,
+    object_key: &str,
+    value_key: &str,
+) -> Option<String> {
     let object_start = text.find(&format!("\"{object_key}\""))?;
     json_string(&text[object_start..], value_key)
 }

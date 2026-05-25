@@ -10,12 +10,12 @@ pub(super) fn classify_failure(
     timed_out: bool,
     artifacts: &RunArtifacts,
 ) -> Result<&'static str, String> {
-    if artifacts.crash_report.is_some() {
-        return Ok("crash_report");
-    }
-
     if timed_out {
         return Ok("timeout");
+    }
+
+    if artifacts.crash_report.is_some() {
+        return Ok("crash_report");
     }
 
     if let Some(log_path) = &artifacts.minecraft_log {
@@ -100,12 +100,13 @@ pub(super) fn toml_escape(value: &str) -> String {
 pub(super) fn collect_run_artifacts(
     game_dir: &Path,
     run_dir: &Path,
+    run_started: SystemTime,
 ) -> Result<RunArtifacts, String> {
     let minecraft_log = copy_if_exists(
         &game_dir.join("logs").join("latest.log"),
         &run_dir.join("minecraft-latest.log"),
     )?;
-    let crash_report = newest_crash_report(&game_dir.join("crash-reports"))?
+    let crash_report = newest_crash_report(&game_dir.join("crash-reports"), run_started)?
         .map(|path| copy_crash_report(&path, run_dir))
         .transpose()?;
 
@@ -152,7 +153,10 @@ pub(super) fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option
     Ok(Some(destination.to_path_buf()))
 }
 
-pub(super) fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn newest_crash_report(
+    crash_dir: &Path,
+    run_started: SystemTime,
+) -> Result<Option<PathBuf>, String> {
     if !crash_dir.is_dir() {
         return Ok(None);
     }
@@ -164,7 +168,11 @@ pub(super) fn newest_crash_report(crash_dir: &Path) -> Result<Option<PathBuf>, S
         let path = entry
             .map_err(|error| format!("failed to read crash report entry: {error}"))?
             .path();
-        if path.is_file() {
+        let modified = path
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| format!("failed to read crash report metadata: {error}"))?;
+        if path.is_file() && modified >= run_started {
             newest = Some(path);
         }
     }

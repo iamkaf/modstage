@@ -18,7 +18,8 @@ pub(in crate::app) fn resolve_installer_profile(
     installer_path: &Path,
     cache_dir: &Path,
 ) -> Result<InstallerProfile, String> {
-    let Some(version_json) = jar_entry_text(installer_path, &["version.json", "/version.json"])? else {
+    let Some(version_json) = jar_entry_text(installer_path, &["version.json", "/version.json"])?
+    else {
         return Ok(InstallerProfile {
             main_class: None,
             jvm_args: Vec::new(),
@@ -222,7 +223,9 @@ fn jar_entry_bytes_with_tool(jar_path: &Path, entries: &[&str]) -> Result<Option
             .arg(entry)
             .current_dir(&temp)
             .status()
-            .map_err(|error| format!("failed to run jar tool for {}: {error}", jar_path.display()))?;
+            .map_err(|error| {
+                format!("failed to run jar tool for {}: {error}", jar_path.display())
+            })?;
         if !status.success() {
             continue;
         }

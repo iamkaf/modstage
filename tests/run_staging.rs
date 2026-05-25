@@ -1234,8 +1234,14 @@ sides = ["server"]
         "run should stream process stderr"
     );
 
-    let state_root = data_home.join("modstage").join("instances");
-    let game_dir = first_child(&state_root)
+    let project_id = format!(
+        "run-exec-{:08x}",
+        stable_hash(&project.display().to_string())
+    );
+    let game_dir = data_home
+        .join("modstage")
+        .join("instances")
+        .join(project_id)
         .join("server-exec-26.1.2")
         .join("server")
         .join("game");
@@ -2619,7 +2625,7 @@ fn run_client_uses_mojang_main_class_and_libraries_from_lockfile() {
             r#"{{
   "objects": {{
     "minecraft/sounds/example.ogg": {{
-      "hash": "07073e89283a7b4c254e22b82c08a83738c6a1f0",
+      "hash": "05fac94380a70241f23780e7aef62b190894238f",
       "size": 5,
       "url": "file://{}"
     }}
@@ -2752,6 +2758,9 @@ sides = ["client"]
             && java_args.contains("client.jar")
             && java_args.contains("example-lib-1.0.0.jar")
             && java_args.contains("net.minecraft.client.main.Main")
+            && java_args.contains("--version")
+            && java_args.contains("26.1.2")
+            && java_args.contains("--accessToken")
             && java_args.contains("--assetIndex")
             && java_args.contains("26")
             && java_args.contains("--assetsDir")
@@ -2919,7 +2928,7 @@ fn locked_client_run_restores_assets_from_the_lockfile_before_launch() {
     let server = metadata.join("server.jar");
     let client = metadata.join("client.jar");
     let asset = metadata.join("asset.ogg");
-    let asset_hash = "07073e89283a7b4c254e22b82c08a83738c6a1f0";
+    let asset_hash = "05fac94380a70241f23780e7aef62b190894238f";
     fs::write(&server, b"server").expect("failed to write server jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&asset, b"asset").expect("failed to write asset object");
@@ -2976,7 +2985,7 @@ fn locked_client_run_restores_assets_from_the_lockfile_before_launch() {
     fs::write(
         &fake_java,
         format!(
-            "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/07/{asset_hash}\" || exit 13\nprintf 'assets restored\\n'\n"
+            "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/05/{asset_hash}\" || exit 13\nprintf 'assets restored\\n'\n"
         ),
     )
     .expect("failed to write fake java");
@@ -3018,6 +3027,15 @@ sides = ["client"]
         String::from_utf8_lossy(&resolve.stderr)
     );
 
+    let trailing_library = metadata.join("after-assets.jar");
+    fs::write(&trailing_library, b"after-assets").expect("failed to write trailing library");
+    let mut lock = fs::read_to_string(project.join("modstage.lock")).expect("lock should exist");
+    lock.push_str(&format!(
+        "\n[[library]]\nname = \"com.example:after-assets:1.0.0\"\npath = \"com/example/after-assets/1.0.0/after-assets-1.0.0.jar\"\nurl = \"file://{}\"\nsha256 = \"c814f9f1e6b30dce2f785878d8f26c45b8a1a3b7cc34d45dd36becf643aee7aa\"\n",
+        trailing_library.display()
+    ));
+    fs::write(project.join("modstage.lock"), lock).expect("failed to append trailing library");
+
     fs::remove_dir_all(cache_home.join("modstage")).expect("failed to clear redownloadable cache");
     let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
     let run = run_in_with_env(
@@ -3046,6 +3064,31 @@ sides = ["client"]
     assert!(
         String::from_utf8_lossy(&run.stdout).contains("assets restored"),
         "fake Java should confirm the restored asset layout"
+    );
+
+    fs::remove_file(&asset).expect("failed to remove source asset object");
+    let cached_run = run_in_with_env(
+        &[
+            "run",
+            "client",
+            "locked-assets-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        cached_run.status.success(),
+        "locked client run should reuse an already verified asset cache\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&cached_run.stdout),
+        String::from_utf8_lossy(&cached_run.stderr)
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");
@@ -3508,6 +3551,10 @@ kind = "jvm"
 arg = "-Dforge.test=true"
 
 [[argument]]
+kind = "jvm"
+arg = "-DlibraryDirectory=${{library_directory}}"
+
+[[argument]]
 kind = "game"
 arg = "--launchTarget"
 
@@ -3559,7 +3606,10 @@ sha256 = "d47712cceb4c780603026e6325221c1bcff90679ebc076baa51c71ebe796717c"
     let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
         .expect("fake java should record its launch args");
     assert!(
-        java_args.contains("-Dforge.test=true\n-cp")
+        java_args.contains("-Dforge.test=true")
+            && java_args.contains("\n-cp")
+            && java_args.contains("-DlibraryDirectory=")
+            && !java_args.contains("${library_directory}")
             && java_args.contains("server-26.1.2.jar")
             && !java_args.contains("server.jar:")
             && java_args.contains(
@@ -3860,8 +3910,11 @@ fn run_neoforge_server_uses_installer_generated_argfile_launch() {
         .join("neoforge")
         .join("1.0");
     fs::create_dir_all(&installer_dir).expect("failed to create installer dir");
-    fs::write(installer_dir.join("neoforge-1.0-installer.jar"), b"installer")
-        .expect("failed to write installer jar");
+    fs::write(
+        installer_dir.join("neoforge-1.0-installer.jar"),
+        b"installer",
+    )
+    .expect("failed to write installer jar");
     let server = metadata.join("server.jar");
     fs::write(&server, b"server").expect("failed to write server jar");
     let fake_java = metadata.join("fake-java-neoforge-installer");
@@ -4016,7 +4069,7 @@ fn run_server_enforces_timeout_and_records_it() {
     let fake_java = metadata.join("fake-java-timeout");
     fs::write(
         &fake_java,
-        "#!/bin/sh\nprintf 'before timeout\\n'\nexec sleep 5\n",
+        "#!/bin/sh\nmkdir -p crash-reports\nprintf 'stale crash\\n' > crash-reports/crash-before-timeout.txt\nprintf 'before timeout\\n'\nexec sleep 5\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)
@@ -4097,6 +4150,7 @@ sides = ["server"]
         r#"status = "timed_out""#,
         "timed_out = true",
         r#"timeout = "10ms""#,
+        r#"failure_class = "timeout""#,
     ] {
         assert!(
             report.contains(expected),
@@ -4455,6 +4509,96 @@ sides = ["server"]
             && report.contains(r#"exit_code = 0"#)
             && report.contains(r#"failure_class = "server_start""#),
         "run report should classify logged server startup failures\n{report}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_client_stops_successfully_after_teakit_ready_log() {
+    let project = temp_dir("run-client-ready-project");
+    let metadata = temp_dir("run-client-ready-metadata");
+    let data_home = temp_dir("run-client-ready-data");
+    let cache_home = temp_dir("run-client-ready-cache");
+    let manifest = write_minimal_mojang_metadata(&metadata);
+    let fake_java = metadata.join("fake-java-client-ready");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'TeaKit listening on http://127.0.0.1:48435\\n'\nexec sleep 30\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-client-ready"
+
+[[instance]]
+name = "client-ready-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let resolve = run_in_with_env(
+        &["resolve", "client-ready-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", Path::new(&manifest_url)),
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "client",
+            "client-ready-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "2s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "client run should pass after TeaKit reports readiness\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let report_path = first_descendant_file(&data_home.join("modstage").join("runs"), "run.toml");
+    let report = fs::read_to_string(report_path).expect("run report should be readable");
+    assert!(
+        report.contains(r#"status = "passed""#)
+            && report.contains("timed_out = false")
+            && report.contains(r#"failure_class = "none""#),
+        "client readiness run should be reported as a pass\n{report}"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");
