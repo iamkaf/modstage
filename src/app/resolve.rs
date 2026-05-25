@@ -56,7 +56,7 @@ sides = [{}]\n",
     );
     let metadata = resolve_minecraft_metadata(&config, instance, config_root)?;
     let lock = if let Some(metadata) = metadata {
-        format!(
+        let mut lock = format!(
             "{lock}\n[minecraft]\nversion = \"{}\"\nmanifest_url = \"{}\"\nmanifest_sha256 = \"{}\"\nversion_url = \"{}\"\nversion_sha256 = \"{}\"\njava_major = {}\nclient_url = \"{}\"\nclient_sha256 = \"{}\"\nserver_url = \"{}\"\nserver_sha256 = \"{}\"\n",
             instance.minecraft,
             metadata.manifest_url,
@@ -68,7 +68,17 @@ sides = [{}]\n",
             metadata.client_sha256,
             metadata.server_url,
             metadata.server_sha256
-        )
+        );
+        if let Some(main_class) = metadata.main_class {
+            lock.push_str(&format!("\n[launch]\nmain_class = \"{main_class}\"\n"));
+        }
+        for library in metadata.libraries {
+            lock.push_str(&format!(
+                "\n[[library]]\nname = \"{}\"\npath = \"{}\"\nurl = \"{}\"\nsha256 = \"{}\"\n",
+                library.name, library.path, library.url, library.sha256
+            ));
+        }
+        lock
     } else {
         lock
     };
@@ -161,4 +171,3 @@ sides = [{}]\n",
 
     Ok(())
 }
-

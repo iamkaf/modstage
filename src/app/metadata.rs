@@ -4,10 +4,19 @@ struct MinecraftMetadata {
     version_url: String,
     version_sha256: String,
     java_major: u32,
+    main_class: Option<String>,
     client_url: String,
     client_sha256: String,
     server_url: String,
     server_sha256: String,
+    libraries: Vec<MinecraftLibrary>,
+}
+
+struct MinecraftLibrary {
+    name: String,
+    path: String,
+    url: String,
+    sha256: String,
 }
 
 struct LoaderMetadata {
@@ -231,6 +240,7 @@ fn resolve_minecraft_metadata(
         .map_err(|error| format!("failed to read {}: {error}", client_path.display()))?;
     let server = fs::read(&server_path)
         .map_err(|error| format!("failed to read {}: {error}", server_path.display()))?;
+    let libraries = resolve_minecraft_libraries(&version_text, &cache_dir)?;
 
     Ok(Some(MinecraftMetadata {
         manifest_url,
@@ -238,11 +248,74 @@ fn resolve_minecraft_metadata(
         version_url,
         version_sha256: sha256_hex(&version),
         java_major,
+        main_class: json_string(&version_text, "mainClass"),
         client_url,
         client_sha256: sha256_hex(&client),
         server_url,
         server_sha256: sha256_hex(&server),
+        libraries,
     }))
+}
+
+fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<Vec<MinecraftLibrary>, String> {
+    let mut libraries = Vec::new();
+
+    for block in minecraft_library_blocks(version_text) {
+        let Some(name) = json_string(block, "name") else {
+            continue;
+        };
+        let Some(artifact) = json_object_after(block, "artifact") else {
+            continue;
+        };
+        let Some(path) = json_string(artifact, "path") else {
+            continue;
+        };
+        let Some(url) = json_string(artifact, "url") else {
+            continue;
+        };
+        let file_name = path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("library.jar");
+        let library_path = fetch_to_cache(&url, &cache_dir.join("libraries"), file_name)?;
+        let bytes = fs::read(&library_path)
+            .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
+
+        libraries.push(MinecraftLibrary {
+            name,
+            path,
+            url,
+            sha256: sha256_hex(&bytes),
+        });
+    }
+
+    Ok(libraries)
+}
+
+fn minecraft_library_blocks(version_text: &str) -> Vec<&str> {
+    let Some(libraries_start) = version_text.find("\"libraries\"") else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    let mut rest = &version_text[libraries_start..];
+
+    while let Some(name_position) = rest.find("\"name\"") {
+        let before_name = &rest[..name_position];
+        let Some(block_start) = before_name.rfind('{') else {
+            break;
+        };
+        let block = &rest[block_start..];
+        blocks.push(block);
+        rest = &rest[name_position + "\"name\"".len()..];
+    }
+
+    blocks
+}
+
+fn json_object_after<'a>(text: &'a str, object_key: &str) -> Option<&'a str> {
+    let object_start = text.find(&format!("\"{object_key}\""))?;
+    Some(&text[object_start..])
 }
 
 fn mojang_manifest_url() -> Option<String> {
@@ -312,4 +385,3 @@ fn json_u32(text: &str, key: &str) -> Option<u32> {
 
     rest[..end].parse().ok()
 }
-
