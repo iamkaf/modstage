@@ -194,6 +194,7 @@ pub(super) fn launch_minecraft_instance(
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let artifact_name = format!("{side}.jar");
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
+    verify_locked_artifact_hash(root, side, &artifact)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
     let java = options
         .java
@@ -731,6 +732,27 @@ pub(super) fn verify_locked_mod_hashes(root: &Path, instance: &Instance) -> Resu
                 "locked mod `{source}` hash mismatch: expected {expected}, got {actual}"
             ));
         }
+    }
+
+    Ok(())
+}
+
+pub(super) fn verify_locked_artifact_hash(
+    root: &Path,
+    side: &str,
+    artifact: &Path,
+) -> Result<(), String> {
+    let key = format!("{side}_sha256");
+    let Some(expected) = locked_value(root, &key)? else {
+        return Ok(());
+    };
+    let bytes = fs::read(artifact)
+        .map_err(|error| format!("failed to read {side} artifact {}: {error}", artifact.display()))?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "{side} artifact hash mismatch: expected {expected}, got {actual}"
+        ));
     }
 
     Ok(())
