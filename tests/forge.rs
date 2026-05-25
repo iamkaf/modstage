@@ -40,6 +40,69 @@ fn temp_dir(name: &str) -> PathBuf {
     root
 }
 
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_stored_jar(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut bytes = Vec::new();
+    let mut central = Vec::new();
+
+    for (name, contents) in entries {
+        let offset = bytes.len() as u32;
+        push_u32(&mut bytes, 0x0403_4b50);
+        push_u16(&mut bytes, 20);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u16(&mut bytes, name.len() as u16);
+        push_u16(&mut bytes, 0);
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(contents);
+
+        push_u32(&mut central, 0x0201_4b50);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, contents.len() as u32);
+        push_u32(&mut central, contents.len() as u32);
+        push_u16(&mut central, name.len() as u16);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, offset);
+        central.extend_from_slice(name.as_bytes());
+    }
+
+    let central_offset = bytes.len() as u32;
+    let central_size = central.len() as u32;
+    bytes.extend_from_slice(&central);
+    push_u32(&mut bytes, 0x0605_4b50);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u32(&mut bytes, central_size);
+    push_u32(&mut bytes, central_offset);
+    push_u16(&mut bytes, 0);
+
+    fs::write(path, bytes).expect("failed to write stored jar");
+}
+
 fn default_mojang_manifest(root: &Path) -> String {
     let metadata = root.join(".modstage-test-mojang");
     fs::create_dir_all(&metadata).expect("failed to create test Mojang metadata dir");
@@ -168,7 +231,7 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
     let installer = metadata.join("forge-26.1.2-64.0.4.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
-    fs::write(&installer, b"installer").expect("failed to write Forge installer jar");
+    write_stored_jar(&installer, &[]);
     let version_json = metadata.join("26.1.2.json");
     fs::write(
         &version_json,
@@ -270,14 +333,177 @@ sides = ["client", "server"]
         r#"installer_maven = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#,
         r#"client_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
         r#"server_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
-        r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#,
-        r#"repository = "forge""#,
     ] {
         assert!(
             lock.contains(expected),
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+    assert!(
+        !lock.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#),
+        "Forge installer should be used as metadata, not added to the launch classpath\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
+}
+
+#[test]
+#[cfg(unix)]
+fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
+    let project = temp_dir("forge-profile-project");
+    let metadata = temp_dir("forge-profile-metadata");
+    let data_home = temp_dir("forge-profile-data");
+    let cache_home = temp_dir("forge-profile-cache");
+    let fake_bin = temp_dir("forge-profile-bin");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    let installer = metadata.join("forge-26.1.2-64.0.4-installer.jar");
+    let bootstrap = metadata.join("bootstraplauncher-2.0.0.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&bootstrap, b"bootstraplauncher").expect("failed to write bootstrap launcher jar");
+    write_stored_jar(
+        &installer,
+        &[(
+            "version.json",
+            br#"{
+  "mainClass": "net.minecraftforge.bootstrap.ForgeBootstrap",
+  "libraries": [
+    {
+      "name": "cpw.mods:bootstraplauncher:2.0.0",
+      "downloads": {
+        "artifact": {
+          "path": "cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar",
+          "url": "https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar"
+        }
+      }
+    },
+    {
+      "name": "net.minecraftforge:forge:26.1.2-64.0.4:client",
+      "downloads": {
+        "artifact": {
+          "path": "net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-client.jar",
+          "url": ""
+        }
+      }
+    }
+  ]
+}"#,
+        )],
+    );
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let curl = fake_bin.join("curl");
+    fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar) cp {} \"$out\" ;;\n  https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
+            metadata.display(),
+            installer.display(),
+            bootstrap.display()
+        ),
+    )
+    .expect("failed to write fake curl");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "forge-profile-test"
+
+[[instance]]
+name = "forge-profile-26.1.2"
+minecraft = "26.1.2"
+loader = "forge"
+loader_version = "26.1.2-64.0.4"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = run_in_with_env(
+        &["resolve", "forge-profile-26.1.2"],
+        &project,
+        &[
+            ("PATH", &path),
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should extract Forge installer profile libraries\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    for expected in [
+        r#"client_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap""#,
+        r#"server_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap""#,
+        r#"name = "cpw.mods:bootstraplauncher:2.0.0""#,
+        r#"url = "https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar""#,
+        r#"sha256 = "603eb608091a4fb09e0c529d8eaa13fcc9c12b21dc8abd170f7f030217c7c729""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+    assert!(
+        !lock.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:client""#),
+        "generated Forge profile libraries with empty URLs should not be locked\n{lock}"
+    );
+    assert!(
+        !lock.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#),
+        "Forge installer should be used as metadata, not added to the launch classpath\n{lock}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");

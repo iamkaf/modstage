@@ -40,6 +40,69 @@ fn temp_dir(name: &str) -> PathBuf {
     root
 }
 
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_stored_jar(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut bytes = Vec::new();
+    let mut central = Vec::new();
+
+    for (name, contents) in entries {
+        let offset = bytes.len() as u32;
+        push_u32(&mut bytes, 0x0403_4b50);
+        push_u16(&mut bytes, 20);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u16(&mut bytes, name.len() as u16);
+        push_u16(&mut bytes, 0);
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(contents);
+
+        push_u32(&mut central, 0x0201_4b50);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, contents.len() as u32);
+        push_u32(&mut central, contents.len() as u32);
+        push_u16(&mut central, name.len() as u16);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, offset);
+        central.extend_from_slice(name.as_bytes());
+    }
+
+    let central_offset = bytes.len() as u32;
+    let central_size = central.len() as u32;
+    bytes.extend_from_slice(&central);
+    push_u32(&mut bytes, 0x0605_4b50);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u32(&mut bytes, central_size);
+    push_u32(&mut bytes, central_offset);
+    push_u16(&mut bytes, 0);
+
+    fs::write(path, bytes).expect("failed to write stored jar");
+}
+
 fn default_mojang_manifest(root: &Path) -> String {
     let metadata = root.join(".modstage-test-mojang");
     fs::create_dir_all(&metadata).expect("failed to create test Mojang metadata dir");
@@ -168,7 +231,7 @@ fn resolve_uses_pinned_neoforge_loader_version_without_metadata_override() {
     let installer = metadata.join("neoforge-26.1.2.22-beta.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
-    fs::write(&installer, b"installer").expect("failed to write NeoForge installer jar");
+    write_stored_jar(&installer, &[]);
     let version_json = metadata.join("26.1.2.json");
     fs::write(
         &version_json,
@@ -270,14 +333,16 @@ sides = ["client", "server"]
         r#"installer_maven = "net.neoforged:neoforge:26.1.2.22-beta:installer""#,
         r#"client_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
         r#"server_main_class = "cpw.mods.bootstraplauncher.BootstrapLauncher""#,
-        r#"name = "net.neoforged:neoforge:26.1.2.22-beta:installer""#,
-        r#"repository = "neoforge""#,
     ] {
         assert!(
             lock.contains(expected),
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+    assert!(
+        !lock.contains(r#"name = "net.neoforged:neoforge:26.1.2.22-beta:installer""#),
+        "NeoForge installer should be used as metadata, not added to the launch classpath\n{lock}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
@@ -299,8 +364,7 @@ fn resolve_adds_neoforge_installer_artifact_to_the_launch_classpath() {
         .join("neoforge")
         .join("4.0.0");
     fs::create_dir_all(&installer_dir).expect("failed to create installer artifact dir");
-    fs::write(installer_dir.join("neoforge-4.0.0.jar"), b"installer")
-        .expect("failed to write installer jar");
+    write_stored_jar(&installer_dir.join("neoforge-4.0.0.jar"), &[]);
     let neoforge_metadata = metadata.join("neoforge-loader.json");
     fs::write(
         &neoforge_metadata,
@@ -360,18 +424,10 @@ sides = ["client", "server"]
     let lock =
         fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
 
-    for expected in [
-        "[[library]]",
-        r#"name = "net.neoforged:neoforge:4.0.0""#,
-        r#"repository = "neoforge""#,
-        r#"path = ""#,
-        r#"sha256 = "9c0d294c05fc1d88d698034609bb81c0c69196327594e4c69d2915c80fd9850c""#,
-    ] {
-        assert!(
-            lock.contains(expected),
-            "lockfile should contain {expected:?}\n{lock}"
-        );
-    }
+    assert!(
+        !lock.contains(r#"name = "net.neoforged:neoforge:4.0.0""#),
+        "NeoForge installer should be used as metadata, not added to the launch classpath\n{lock}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");

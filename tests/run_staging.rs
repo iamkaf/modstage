@@ -47,6 +47,69 @@ fn temp_dir(name: &str) -> PathBuf {
     root
 }
 
+fn push_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_stored_jar(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut bytes = Vec::new();
+    let mut central = Vec::new();
+
+    for (name, contents) in entries {
+        let offset = bytes.len() as u32;
+        push_u32(&mut bytes, 0x0403_4b50);
+        push_u16(&mut bytes, 20);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u32(&mut bytes, contents.len() as u32);
+        push_u16(&mut bytes, name.len() as u16);
+        push_u16(&mut bytes, 0);
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(contents);
+
+        push_u32(&mut central, 0x0201_4b50);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 20);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, contents.len() as u32);
+        push_u32(&mut central, contents.len() as u32);
+        push_u16(&mut central, name.len() as u16);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u16(&mut central, 0);
+        push_u32(&mut central, 0);
+        push_u32(&mut central, offset);
+        central.extend_from_slice(name.as_bytes());
+    }
+
+    let central_offset = bytes.len() as u32;
+    let central_size = central.len() as u32;
+    bytes.extend_from_slice(&central);
+    push_u32(&mut bytes, 0x0605_4b50);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, 0);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u16(&mut bytes, entries.len() as u16);
+    push_u32(&mut bytes, central_size);
+    push_u32(&mut bytes, central_offset);
+    push_u16(&mut bytes, 0);
+
+    fs::write(path, bytes).expect("failed to write stored jar");
+}
+
 fn write_minimal_mojang_metadata(root: &Path) -> PathBuf {
     let client = root.join("client.jar");
     let server = root.join("server.jar");
@@ -2977,8 +3040,7 @@ fn run_neoforge_server_uses_loader_main_class_and_libraries() {
         .join("neoforge")
         .join("4.0.0");
     fs::create_dir_all(&installer_dir).expect("failed to create NeoForge artifact dir");
-    fs::write(installer_dir.join("neoforge-4.0.0.jar"), b"installer")
-        .expect("failed to write NeoForge installer jar");
+    write_stored_jar(&installer_dir.join("neoforge-4.0.0.jar"), &[]);
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
@@ -3108,7 +3170,7 @@ sides = ["server"]
     assert!(
         java_args.contains("-cp")
             && java_args.contains("server.jar")
-            && java_args.contains("neoforge-4.0.0.jar")
+            && !java_args.contains("neoforge-4.0.0.jar")
             && java_args.contains("cpw.mods.bootstraplauncher.BootstrapLauncher")
             && !java_args.contains("-jar"),
         "NeoForge server launch should use the loader main class and loader libraries\n{java_args}"

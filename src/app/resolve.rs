@@ -139,6 +139,34 @@ sides = [{}]\n",
     };
     let loader = resolve_loader_metadata(config, instance, config_root)?;
     let lock = if let Some(loader) = loader {
+        let mut resolved_loader_libraries = Vec::new();
+        let mut installer_profile = None;
+        for coordinate in [
+            loader.loader_maven.as_deref(),
+            loader.intermediary_maven.as_deref(),
+            loader.installer_maven.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(resolved) =
+                resolved_maven_library_artifact(&repositories, &maven_cache, coordinate, None)?
+            {
+                let is_installer = loader.installer_maven.as_deref() == Some(coordinate);
+                if is_installer && matches!(loader.kind.as_str(), "forge" | "neoforge") {
+                    let profile_cache = maven_cache.join(&loader.kind).join("installer-profile");
+                    installer_profile =
+                        Some(resolve_installer_profile(&resolved.path, &profile_cache)?);
+                    continue;
+                }
+                resolved_loader_libraries.push(resolved);
+            }
+        }
+        let profile_main_class = installer_profile
+            .as_ref()
+            .and_then(|profile| profile.main_class.as_deref());
+        let client_main_class = profile_main_class.unwrap_or(&loader.client_main_class);
+        let server_main_class = profile_main_class.unwrap_or(&loader.server_main_class);
         let mut lock = format!(
             "{lock}\n[loader]\nkind = \"{}\"\nversion = \"{}\"\n",
             loader.kind, loader.version
@@ -154,18 +182,17 @@ sides = [{}]\n",
         }
         lock.push_str(&format!(
             "client_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
-            loader.client_main_class, loader.server_main_class
+            client_main_class, server_main_class
         ));
-        for coordinate in [
-            loader.loader_maven.as_deref(),
-            loader.intermediary_maven.as_deref(),
-            loader.installer_maven.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(entry) = resolved_maven_library(&repositories, &maven_cache, coordinate)? {
-                lock.push_str(&entry);
+        for resolved in resolved_loader_libraries {
+            lock.push_str(&resolved.entry);
+        }
+        if let Some(profile) = installer_profile {
+            for library in profile.libraries {
+                lock.push_str(&format!(
+                    "\n[[library]]\nname = \"{}\"\nurl = \"{}\"\npath = \"{}\"\nsha256 = \"{}\"\n",
+                    library.name, library.url, library.path, library.sha256
+                ));
             }
         }
         for library in &loader.libraries {
@@ -262,20 +289,27 @@ sides = [{}]\n",
     Ok(lock)
 }
 
-pub(super) fn resolved_maven_library(
-    repositories: &[(String, String)],
-    cache_dir: &Path,
-    coordinate: &str,
-) -> Result<Option<String>, String> {
-    resolved_maven_library_with_side(repositories, cache_dir, coordinate, None)
-}
-
 pub(super) fn resolved_maven_library_with_side(
     repositories: &[(String, String)],
     cache_dir: &Path,
     coordinate: &str,
     side: Option<&str>,
 ) -> Result<Option<String>, String> {
+    Ok(resolved_maven_library_artifact(repositories, cache_dir, coordinate, side)?
+        .map(|resolved| resolved.entry))
+}
+
+pub(super) struct ResolvedMavenLibrary {
+    pub(super) entry: String,
+    pub(super) path: PathBuf,
+}
+
+pub(super) fn resolved_maven_library_artifact(
+    repositories: &[(String, String)],
+    cache_dir: &Path,
+    coordinate: &str,
+    side: Option<&str>,
+) -> Result<Option<ResolvedMavenLibrary>, String> {
     let Some(coordinates) = MavenCoordinates::parse_coordinate(coordinate) else {
         return Ok(None);
     };
@@ -299,7 +333,8 @@ pub(super) fn resolved_maven_library_with_side(
         .map(|side| format!("side = \"{side}\"\n"))
         .unwrap_or_default();
 
-    Ok(Some(format!(
+    Ok(Some(ResolvedMavenLibrary {
+        entry: format!(
         "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\n{}{}path = \"{}\"\nsha256 = \"{}\"\n",
         coordinate,
         artifact.repository,
@@ -307,7 +342,9 @@ pub(super) fn resolved_maven_library_with_side(
         side,
         path.display(),
         sha256_hex(&bytes)
-    )))
+        ),
+        path,
+    }))
 }
 
 pub(super) struct ResolvedMavenArtifact {
