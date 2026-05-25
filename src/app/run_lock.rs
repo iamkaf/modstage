@@ -136,14 +136,39 @@ pub(super) fn fetch_locked_libraries(
             .and_then(|path| path.rsplit('/').next().map(str::to_string))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "library.jar".to_string());
+        let name = block_string_value(block, "name").unwrap_or_else(|| file_name.clone());
         if let Some(url) = block_string_value(block, "url") {
-            libraries.push(fetch_to_cache(&url, cache_dir, &file_name)?);
+            let path = fetch_to_cache(&url, cache_dir, &file_name)?;
+            verify_locked_library_hash(block, &name, &path)?;
+            libraries.push(path);
         } else if let Some(path) = block_string_value(block, "path") {
-            libraries.push(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            verify_locked_library_hash(block, &name, &path)?;
+            libraries.push(path);
         }
     }
 
     Ok(libraries)
+}
+
+pub(super) fn verify_locked_library_hash(
+    block: &str,
+    name: &str,
+    path: &Path,
+) -> Result<(), String> {
+    let Some(expected) = block_string_value(block, "sha256") else {
+        return Ok(());
+    };
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read locked library {}: {error}", path.display()))?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "locked library `{name}` hash mismatch: expected {expected}, got {actual}"
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn join_classpath(paths: &[PathBuf]) -> String {
