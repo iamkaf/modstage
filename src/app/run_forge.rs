@@ -22,6 +22,15 @@ pub(super) fn prepare_forge_server_launch(
     };
     let coordinates = MavenCoordinates::parse_coordinate(&installer_maven)
         .ok_or_else(|| format!("invalid Forge installer coordinate `{installer_maven}`"))?;
+    let loader_args = forge_server_args_file(coordinates.version);
+    let loader_args_path = game_dir.join(loader_args.trim_start_matches('@'));
+    if loader_args_path.is_file() {
+        return Ok(Some(ForgeServerLaunch {
+            artifact: loader_args_path,
+            args: forge_server_launch_args(game_dir, loader_args),
+        }));
+    }
+
     let repositories = repositories_with_builtins(&config.repositories);
     let installer = resolve_maven_artifact(
         &repositories,
@@ -53,8 +62,6 @@ pub(super) fn prepare_forge_server_launch(
         ));
     }
 
-    let loader_args = forge_server_args_file(coordinates.version);
-    let loader_args_path = game_dir.join(loader_args.trim_start_matches('@'));
     if !loader_args_path.is_file() {
         return Err(format!(
             "Forge installer did not create {}",
@@ -62,17 +69,20 @@ pub(super) fn prepare_forge_server_launch(
         ));
     }
 
+    Ok(Some(ForgeServerLaunch {
+        artifact: installer.path,
+        args: forge_server_launch_args(game_dir, loader_args),
+    }))
+}
+
+fn forge_server_launch_args(game_dir: &Path, loader_args: String) -> Vec<String> {
     let mut args = Vec::new();
     if game_dir.join("user_jvm_args.txt").is_file() {
         args.push("@user_jvm_args.txt".to_string());
     }
     args.push(loader_args);
     args.push("nogui".to_string());
-
-    Ok(Some(ForgeServerLaunch {
-        artifact: installer.path,
-        args,
-    }))
+    args
 }
 
 fn forge_server_args_file(version: &str) -> String {
