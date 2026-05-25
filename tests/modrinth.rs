@@ -129,3 +129,112 @@ mods = [
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
+
+#[test]
+fn resolve_honors_a_pinned_modrinth_version_source() {
+    let project = temp_dir("modrinth-pinned-project");
+    let metadata = temp_dir("modrinth-pinned-metadata");
+    let data_home = temp_dir("modrinth-pinned-data");
+    let cache_home = temp_dir("modrinth-pinned-cache");
+    let old_jar = metadata.join("sample-mod-1.0.0.jar");
+    let pinned_jar = metadata.join("sample-mod-2.0.0.jar");
+    fs::write(&old_jar, b"old").expect("failed to write old Modrinth jar");
+    fs::write(&pinned_jar, b"abc").expect("failed to write pinned Modrinth jar");
+    let versions = metadata.join("sample-mod-versions.json");
+    fs::write(
+        &versions,
+        format!(
+            r#"[{{
+  "id": "old-version",
+  "project_id": "sample-project",
+  "version_number": "1.0.0",
+  "game_versions": ["26.1.2"],
+  "loaders": ["fabric"],
+  "files": [{{
+    "primary": true,
+    "filename": "sample-mod-1.0.0.jar",
+    "url": "file://{}",
+    "hashes": {{"sha1": "c00dbbc9dadfbe1e232e93a729dd4752fade0abf"}}
+  }}]
+}}, {{
+  "id": "pinned-version",
+  "project_id": "sample-project",
+  "version_number": "2.0.0",
+  "game_versions": ["26.1.2"],
+  "loaders": ["fabric"],
+  "files": [{{
+    "primary": true,
+    "filename": "sample-mod-2.0.0.jar",
+    "url": "file://{}",
+    "hashes": {{"sha1": "a9993e364706816aba3e25717850c26c9cd0d89d"}}
+  }}]
+}}]"#,
+            old_jar.display(),
+            pinned_jar.display()
+        ),
+    )
+    .expect("failed to write Modrinth versions metadata");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "modrinth-pinned-test"
+
+[[instance]]
+name = "modrinth-pinned-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+mods = [
+  "modrinth:sample-mod:2.0.0",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let versions_url = format!("file://{}", versions.display());
+    let output = run_in_with_env(
+        &["resolve", "modrinth-pinned-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
+            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
+            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+
+    for expected in [
+        r#"source = "modrinth:sample-mod:2.0.0""#,
+        r#"project = "sample-mod""#,
+        r#"version_id = "pinned-version""#,
+        r#"version_number = "2.0.0""#,
+        r#"filename = "sample-mod-2.0.0.jar""#,
+        &format!(r#"url = "file://{}""#, pinned_jar.display()),
+        r#"sha1 = "a9993e364706816aba3e25717850c26c9cd0d89d""#,
+        r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+    assert!(
+        !lock.contains("old-version") && !lock.contains("sample-mod-1.0.0.jar"),
+        "pinned Modrinth source should not resolve the first available version\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}

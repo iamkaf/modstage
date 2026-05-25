@@ -157,8 +157,8 @@ sides = [{}]\n",
                 path.display(),
                 sha256_hex(&bytes)
             ));
-        } else if let Some(project) = modrinth_project(source) {
-            let resolved = resolve_modrinth_mod(&config, instance, config_root, project)?;
+        } else if let Some(modrinth) = modrinth_source(source) {
+            let resolved = resolve_modrinth_mod(&config, instance, config_root, &modrinth)?;
             lock.push_str(&format!(
                 "\n[[mod]]\nsource = \"{}\"\nprovider = \"modrinth\"\nproject = \"{}\"\nversion_id = \"{}\"\nversion_number = \"{}\"\nfilename = \"{}\"\nurl = \"{}\"\npath = \"{}\"\nsha1 = \"{}\"\nsha512 = \"{}\"\nsha256 = \"{}\"\n",
                 source,
