@@ -69,8 +69,7 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             clean_instance(invocation.config, instance, rest)
         }
         [command, subject] if command == "clean" && subject == "cache" => {
-            println!("clean cache is not implemented yet");
-            Ok(())
+            clean_cache(invocation.config)
         }
         [command, ..] if command == "clean" => Err("unknown clean command".to_string()),
         [command, subject] if command == "java" && subject == "list" => java_list(),

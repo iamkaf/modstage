@@ -78,3 +78,55 @@ sides = ["client", "server"]
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
+
+#[test]
+fn clean_cache_removes_redownloadable_modstage_cache() {
+    let project = temp_dir("clean-cache-project");
+    let data_home = temp_dir("clean-cache-data");
+    let cache_home = temp_dir("clean-cache-cache");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "clean-cache"
+
+[[instance]]
+name = "vanilla-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+    let cache_file = cache_home
+        .join("modstage")
+        .join("downloads")
+        .join("mojang")
+        .join("server.jar");
+    fs::create_dir_all(cache_file.parent().expect("cache file should have parent"))
+        .expect("failed to create cache dir");
+    fs::write(&cache_file, b"cached").expect("failed to write cache file");
+
+    let output = run_in_with_env(
+        &["clean", "cache"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        output.status.success(),
+        "clean cache should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !cache_home.join("modstage").exists(),
+        "clean cache should remove the modstage cache directory"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("removed"),
+        "clean cache should report what it removed"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}

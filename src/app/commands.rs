@@ -190,6 +190,25 @@ pub(super) fn clean_instance(
     Ok(())
 }
 
+pub(super) fn clean_cache(explicit_config: Option<PathBuf>) -> Result<(), String> {
+    let config_path = config_path(explicit_config)?;
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let project_name = project_name(&contents)
+        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let dirs = StateDirs::for_project(&project_name, root)?;
+
+    if dirs.cache.exists() {
+        fs::remove_dir_all(&dirs.cache)
+            .map_err(|error| format!("failed to remove {}: {error}", dirs.cache.display()))?;
+    }
+
+    println!("removed {}", dirs.cache.display());
+
+    Ok(())
+}
+
 pub(super) fn parse_side_arg(args: &[String]) -> Result<Option<&str>, String> {
     let mut side = None;
     let mut iter = args.iter();
