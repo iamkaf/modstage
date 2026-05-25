@@ -93,13 +93,38 @@ mods = [
     );
 
     let reports_root = data_home.join("modstage").join("runs");
-    let report = fs::read_to_string(first_descendant_file(&reports_root, "run.toml"))
+    let report_path = first_descendant_file(&reports_root, "run.toml");
+    let run_id = report_path
+        .parent()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .expect("run report should have a UTF-8 run id")
+        .to_string();
+    let report = fs::read_to_string(&report_path)
         .expect("run report should be readable");
     assert!(
         report.contains(r#"instance = "server-stage-26.1.2""#)
             && report.contains(r#"side = "server""#)
             && report.contains(r#"status = "staged""#),
         "run report should describe staged run\n{report}"
+    );
+
+    let inspect = run_in_with_env(
+        &["inspect", "run", &run_id],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        inspect.status.success(),
+        "inspect run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&inspect.stdout),
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let inspect_stdout = String::from_utf8_lossy(&inspect.stdout);
+    assert!(
+        inspect_stdout.contains(r#"instance = "server-stage-26.1.2""#)
+            && inspect_stdout.contains(r#"status = "staged""#),
+        "inspect run should print the run report\n{inspect_stdout}"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");

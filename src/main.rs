@@ -61,6 +61,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
         [command, subject] if command == "inspect" && subject == "config" => {
             inspect_config(invocation.config)
         }
+        [command, subject, run_id] if command == "inspect" && subject == "run" => {
+            inspect_run(invocation.config, run_id)
+        }
         [command, ..] if command == "inspect" => {
             println!("inspect is not implemented yet");
             Ok(())
@@ -178,6 +181,28 @@ fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
     println!("state-id: {}", dirs.project_id);
     println!("data: {}", dirs.data.display());
     println!("cache: {}", dirs.cache.display());
+
+    Ok(())
+}
+
+fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), String> {
+    let config_path = config_path(explicit_config)?;
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let project_name = project_name(&contents)
+        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let dirs = StateDirs::for_project(&project_name, root)?;
+    let report_path = dirs
+        .data
+        .join("runs")
+        .join(&dirs.project_id)
+        .join(run_id)
+        .join("run.toml");
+    let report = fs::read_to_string(&report_path)
+        .map_err(|error| format!("failed to read {}: {error}", report_path.display()))?;
+
+    print!("{report}");
 
     Ok(())
 }
