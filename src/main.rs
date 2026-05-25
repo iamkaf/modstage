@@ -366,6 +366,20 @@ sides = [{}]\n",
     } else {
         lock
     };
+    let loader = resolve_loader_metadata(&config, instance, config_root)?;
+    let lock = if let Some(loader) = loader {
+        format!(
+            "{lock}\n[loader]\nkind = \"{}\"\nversion = \"{}\"\nloader_maven = \"{}\"\nintermediary_maven = \"{}\"\nclient_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
+            loader.kind,
+            loader.version,
+            loader.loader_maven,
+            loader.intermediary_maven,
+            loader.client_main_class,
+            loader.server_main_class
+        )
+    } else {
+        lock
+    };
     let mut lock = if instance.mods.is_empty() {
         lock
     } else {
@@ -559,6 +573,52 @@ struct MinecraftMetadata {
     client_sha256: String,
     server_url: String,
     server_sha256: String,
+}
+
+struct LoaderMetadata {
+    kind: String,
+    version: String,
+    loader_maven: String,
+    intermediary_maven: String,
+    client_main_class: String,
+    server_main_class: String,
+}
+
+fn resolve_loader_metadata(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+) -> Result<Option<LoaderMetadata>, String> {
+    if instance.loader != "fabric" {
+        return Ok(None);
+    }
+
+    let Some(url) = fabric_meta_url() else {
+        return Ok(None);
+    };
+    let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let cache_dir = dirs.cache.join("downloads").join("fabric");
+    let path = fetch_to_cache(&url, &cache_dir, &format!("{}-loader.json", instance.minecraft))?;
+    let metadata = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+
+    Ok(Some(LoaderMetadata {
+        kind: "fabric".to_string(),
+        version: json_string(&metadata, "version")
+            .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
+        loader_maven: json_object_string(&metadata, "loader", "maven")
+            .ok_or_else(|| "Fabric metadata did not include loader maven coordinate".to_string())?,
+        intermediary_maven: json_object_string(&metadata, "intermediary", "maven")
+            .ok_or_else(|| "Fabric metadata did not include intermediary maven coordinate".to_string())?,
+        client_main_class: json_object_string(&metadata, "mainClass", "client")
+            .ok_or_else(|| "Fabric metadata did not include client main class".to_string())?,
+        server_main_class: json_object_string(&metadata, "mainClass", "server")
+            .ok_or_else(|| "Fabric metadata did not include server main class".to_string())?,
+    }))
+}
+
+fn fabric_meta_url() -> Option<String> {
+    env::var("MODSTAGE_FABRIC_META_URL").ok()
 }
 
 fn resolve_minecraft_metadata(
