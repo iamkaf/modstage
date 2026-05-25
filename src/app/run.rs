@@ -180,7 +180,7 @@ fn launch_minecraft_instance(
         .unwrap_or_else(|| PathBuf::from(java_bin()));
     let mut command = Command::new(&java);
     if side == "client"
-        && let Some(main_class) = locked_value(root, "main_class")?
+        && let Some(main_class) = locked_main_class(root, side)?
     {
         let mut classpath = vec![artifact.clone()];
         classpath.extend(fetch_locked_libraries(root, &cache_dir.join("libraries"))?);
@@ -490,6 +490,15 @@ fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
     Ok(block_string_value(&lock, key))
 }
 
+fn locked_main_class(root: &Path, side: &str) -> Result<Option<String>, String> {
+    let side_key = format!("{side}_main_class");
+    if let Some(main_class) = locked_value(root, &side_key)? {
+        return Ok(Some(main_class));
+    }
+
+    locked_value(root, "main_class")
+}
+
 fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
@@ -500,14 +509,15 @@ fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>,
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
     let mut libraries = Vec::new();
     for block in lock.split("[[library]]").skip(1) {
-        let Some(url) = block_string_value(block, "url") else {
-            continue;
-        };
         let file_name = block_string_value(block, "path")
             .and_then(|path| path.rsplit('/').next().map(str::to_string))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "library.jar".to_string());
-        libraries.push(fetch_to_cache(&url, cache_dir, &file_name)?);
+        if let Some(url) = block_string_value(block, "url") {
+            libraries.push(fetch_to_cache(&url, cache_dir, &file_name)?);
+        } else if let Some(path) = block_string_value(block, "path") {
+            libraries.push(PathBuf::from(path));
+        }
     }
 
     Ok(libraries)
