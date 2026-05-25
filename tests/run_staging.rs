@@ -1468,6 +1468,141 @@ sides = ["client"]
 
 #[test]
 #[cfg(unix)]
+fn locked_run_uses_managed_java_matching_the_lockfile_major() {
+    let project = temp_dir("run-managed-java-project");
+    let metadata = temp_dir("run-managed-java-metadata");
+    let data_home = temp_dir("run-managed-java-data");
+    let cache_home = temp_dir("run-managed-java-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let managed_java = metadata.join("managed-java-25");
+    fs::write(
+        &managed_java,
+        "#!/bin/sh\nprintf 'managed java stdout\\n'\nprintf '%s\\n' \"$@\" > java-args.txt\n",
+    )
+    .expect("failed to write managed java");
+    let mut permissions = fs::metadata(&managed_java)
+        .expect("managed java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&managed_java, permissions).expect("failed to chmod managed java");
+    let managed_dir = data_home.join("modstage").join("java").join("25");
+    fs::create_dir_all(&managed_dir).expect("failed to create managed Java dir");
+    fs::write(
+        managed_dir.join("runtime.toml"),
+        format!("major = 25\njava = \"{}\"\n", managed_java.display()),
+    )
+    .expect("failed to write managed Java record");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-managed-java"
+
+[[instance]]
+name = "managed-java-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "managed-java-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let run = run_in_with_env(
+        &[
+            "run",
+            "client",
+            "managed-java-26.1.2",
+            "--locked",
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        run.status.success(),
+        "locked run should use managed Java for the lockfile major\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("managed java stdout"),
+        "managed Java stdout should stream to the terminal"
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let game_dir = first_child(&state_root)
+        .join("managed-java-26.1.2")
+        .join("client")
+        .join("game");
+    let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
+        .expect("managed Java should record its launch args");
+    assert!(
+        java_args.contains("-jar") && java_args.contains("client.jar"),
+        "managed Java should receive the Minecraft launch args\n{java_args}"
+    );
+    let report_path = first_descendant_file(&data_home.join("modstage").join("runs"), "run.toml");
+    let report = fs::read_to_string(report_path).expect("run report should be readable");
+    assert!(
+        report.contains(&format!(r#"java = "{}""#, managed_java.display())),
+        "run report should record the managed Java path\n{report}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_client_uses_mojang_main_class_and_libraries_from_lockfile() {
     let project = temp_dir("run-client-classpath-project");
     let metadata = temp_dir("run-client-classpath-metadata");

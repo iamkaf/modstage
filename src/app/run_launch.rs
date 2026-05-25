@@ -16,10 +16,7 @@ pub(super) fn launch_minecraft_instance(
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
     verify_locked_artifact_hash(root, side, &artifact)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
-    let java = options
-        .java
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(java_bin()));
+    let java = selected_java(root, options)?;
     let mut command = Command::new(&java);
     let mut launch_args = Vec::new();
     if let Some(main_class) = locked_main_class(root, side)? {
@@ -133,4 +130,18 @@ pub(super) fn launch_minecraft_instance(
         exit_code,
         timed_out,
     })
+}
+
+pub(super) fn selected_java(root: &Path, options: &RunOptions) -> Result<PathBuf, String> {
+    if let Some(java) = &options.java {
+        return Ok(java.clone());
+    }
+
+    if let Some(major) = locked_java_major(root)? {
+        if let Some(java) = managed_java_for_major(major)? {
+            return Ok(java);
+        }
+    }
+
+    Ok(PathBuf::from(java_bin()))
 }

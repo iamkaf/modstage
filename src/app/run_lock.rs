@@ -119,6 +119,16 @@ pub(super) fn locked_main_class(root: &Path, side: &str) -> Result<Option<String
     locked_value(root, "main_class")
 }
 
+pub(super) fn locked_java_major(root: &Path) -> Result<Option<u32>, String> {
+    locked_value(root, "java_major")?
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|error| format!("invalid locked java_major `{value}`: {error}"))
+        })
+        .transpose()
+}
+
 pub(super) fn fetch_locked_libraries(
     root: &Path,
     cache_dir: &Path,

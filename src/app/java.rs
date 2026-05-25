@@ -102,6 +102,28 @@ pub(super) fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String>
     Ok(java)
 }
 
+pub(super) fn managed_java_for_major(major: u32) -> Result<Option<PathBuf>, String> {
+    let install_dir = data_home()?.join("modstage").join("java").join(major.to_string());
+    let record_path = install_dir.join("runtime.toml");
+    if record_path.is_file() {
+        let record = fs::read_to_string(&record_path)
+            .map_err(|error| format!("failed to read {}: {error}", record_path.display()))?;
+        if let Some(java) = block_string_value(&record, "java") {
+            let java = PathBuf::from(java);
+            if java.is_file() {
+                return Ok(Some(java));
+            }
+        }
+    }
+
+    let java = install_dir.join("bin").join(java_bin());
+    if java.is_file() {
+        return Ok(Some(java));
+    }
+
+    Ok(None)
+}
+
 pub(super) fn discover_java_runtimes() -> Vec<PathBuf> {
     let Some(path) = env::var_os("PATH") else {
         return Vec::new();
