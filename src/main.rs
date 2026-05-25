@@ -46,8 +46,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         [command] if command == "init" => {
-            println!("init is not implemented yet");
-            Ok(())
+            init_project()
         }
         [command] if command == "resolve" => {
             println!("resolve is not implemented yet");
@@ -171,6 +170,37 @@ fn inspect_config(explicit_config: Option<PathBuf>) -> Result<(), String> {
 
     println!("config: {}", config_path.display());
     println!("project: {project_name}");
+
+    Ok(())
+}
+
+fn init_project() -> Result<(), String> {
+    let current_dir = env::current_dir().map_err(|error| error.to_string())?;
+    let config_path = current_dir.join("modstage.toml");
+
+    if config_path.exists() {
+        return Err(format!("{} already exists", config_path.display()));
+    }
+
+    let project_name = current_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("modstage-project");
+    let template = format!(
+        r#"[project]
+name = "{project_name}"
+
+[[instance]]
+name = "vanilla-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#
+    );
+
+    fs::write(&config_path, template)
+        .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
+    println!("created {}", config_path.display());
 
     Ok(())
 }
