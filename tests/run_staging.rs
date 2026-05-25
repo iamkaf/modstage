@@ -3516,6 +3516,97 @@ sides = ["server"]
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
 
+#[test]
+#[cfg(unix)]
+fn run_server_fails_when_minecraft_log_reports_startup_failure_with_zero_exit() {
+    let project = temp_dir("run-server-log-failure-project");
+    let metadata = temp_dir("run-server-log-failure-metadata");
+    let data_home = temp_dir("run-server-log-failure-data");
+    let cache_home = temp_dir("run-server-log-failure-cache");
+    let manifest = write_minimal_mojang_metadata(&metadata);
+    let fake_java = metadata.join("fake-java-server-log-failure");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nmkdir -p logs\nprintf 'Failed to start the minecraft server\\njava.awt.AWTError: no display\\n' > logs/latest.log\nexit 0\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-server-log-failure"
+
+[[instance]]
+name = "server-log-failure-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-log-failure-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "server-log-failure-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", &data_home),
+            ("XDG_CACHE_HOME", &cache_home),
+        ],
+    );
+    assert!(
+        !run.status.success(),
+        "run should fail when the Minecraft log reports startup failure despite exit 0"
+    );
+
+    let reports_root = data_home.join("modstage").join("runs");
+    let report_path = first_descendant_file(&reports_root, "run.toml");
+    let report = fs::read_to_string(&report_path).expect("run report should be readable");
+    assert!(
+        report.contains(r#"status = "failed""#)
+            && report.contains(r#"exit_code = 0"#)
+            && report.contains(r#"failure_class = "server_start""#),
+        "run report should classify logged server startup failures\n{report}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
 fn first_child(path: &Path) -> PathBuf {
     fs::read_dir(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))

@@ -86,9 +86,10 @@ pub(super) fn launch_minecraft_instance(
 
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
-    let success = output.status.success() && !timed_out;
+    let process_success = output.status.success() && !timed_out;
     let artifacts = collect_run_artifacts(game_dir, run_dir)?;
-    let failure_class = classify_failure(success, timed_out, &artifacts)?;
+    let failure_class = classify_failure(process_success, timed_out, &artifacts)?;
+    let success = process_success && failure_class == "none";
     let report_path = run_dir.join("run.toml");
     fs::write(
         &report_path,

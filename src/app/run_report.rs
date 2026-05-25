@@ -18,14 +18,13 @@ pub(super) fn classify_failure(
         return Ok("timeout");
     }
 
-    if success {
-        return Ok("none");
-    }
-
     if let Some(log_path) = &artifacts.minecraft_log {
         let log = fs::read_to_string(log_path)
             .map_err(|error| format!("failed to read {}: {error}", log_path.display()))?;
         let lower = log.to_ascii_lowercase();
+        if lower.contains("failed to start the minecraft server") {
+            return Ok("server_start");
+        }
         if lower.contains("mixin apply failed")
             || lower.contains("mixintransformererror")
             || lower.contains("mixin transformation")
@@ -41,6 +40,10 @@ pub(super) fn classify_failure(
         if lower.contains("bootstraplauncher") || lower.contains("knot") {
             return Ok("loader_bootstrap");
         }
+    }
+
+    if success {
+        return Ok("none");
     }
 
     Ok("process_exit")
