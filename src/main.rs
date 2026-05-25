@@ -368,15 +368,24 @@ sides = [{}]\n",
     };
     let loader = resolve_loader_metadata(&config, instance, config_root)?;
     let lock = if let Some(loader) = loader {
-        format!(
-            "{lock}\n[loader]\nkind = \"{}\"\nversion = \"{}\"\nloader_maven = \"{}\"\nintermediary_maven = \"{}\"\nclient_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
-            loader.kind,
-            loader.version,
-            loader.loader_maven,
-            loader.intermediary_maven,
-            loader.client_main_class,
-            loader.server_main_class
-        )
+        let mut lock = format!(
+            "{lock}\n[loader]\nkind = \"{}\"\nversion = \"{}\"\n",
+            loader.kind, loader.version
+        );
+        if let Some(loader_maven) = loader.loader_maven {
+            lock.push_str(&format!("loader_maven = \"{loader_maven}\"\n"));
+        }
+        if let Some(intermediary_maven) = loader.intermediary_maven {
+            lock.push_str(&format!("intermediary_maven = \"{intermediary_maven}\"\n"));
+        }
+        if let Some(installer_maven) = loader.installer_maven {
+            lock.push_str(&format!("installer_maven = \"{installer_maven}\"\n"));
+        }
+        lock.push_str(&format!(
+            "client_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
+            loader.client_main_class, loader.server_main_class
+        ));
+        lock
     } else {
         lock
     };
@@ -578,8 +587,9 @@ struct MinecraftMetadata {
 struct LoaderMetadata {
     kind: String,
     version: String,
-    loader_maven: String,
-    intermediary_maven: String,
+    loader_maven: Option<String>,
+    intermediary_maven: Option<String>,
+    installer_maven: Option<String>,
     client_main_class: String,
     server_main_class: String,
 }
@@ -589,27 +599,36 @@ fn resolve_loader_metadata(
     instance: &Instance,
     root: &Path,
 ) -> Result<Option<LoaderMetadata>, String> {
-    if instance.loader != "fabric" {
-        return Ok(None);
+    match instance.loader.as_str() {
+        "fabric" => resolve_fabric_loader_metadata(config, instance, root),
+        "neoforge" => resolve_neoforge_loader_metadata(config, instance, root),
+        _ => Ok(None),
     }
+}
 
+fn resolve_fabric_loader_metadata(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+) -> Result<Option<LoaderMetadata>, String> {
     let Some(url) = fabric_meta_url() else {
         return Ok(None);
     };
-    let dirs = StateDirs::for_project(&config.project_name, root)?;
-    let cache_dir = dirs.cache.join("downloads").join("fabric");
-    let path = fetch_to_cache(&url, &cache_dir, &format!("{}-loader.json", instance.minecraft))?;
-    let metadata = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let metadata = loader_metadata_text(config, root, "fabric", &url, instance)?;
 
     Ok(Some(LoaderMetadata {
         kind: "fabric".to_string(),
         version: json_string(&metadata, "version")
             .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
-        loader_maven: json_object_string(&metadata, "loader", "maven")
-            .ok_or_else(|| "Fabric metadata did not include loader maven coordinate".to_string())?,
-        intermediary_maven: json_object_string(&metadata, "intermediary", "maven")
-            .ok_or_else(|| "Fabric metadata did not include intermediary maven coordinate".to_string())?,
+        loader_maven: Some(
+            json_object_string(&metadata, "loader", "maven")
+                .ok_or_else(|| "Fabric metadata did not include loader maven coordinate".to_string())?,
+        ),
+        intermediary_maven: Some(
+            json_object_string(&metadata, "intermediary", "maven")
+                .ok_or_else(|| "Fabric metadata did not include intermediary maven coordinate".to_string())?,
+        ),
+        installer_maven: None,
         client_main_class: json_object_string(&metadata, "mainClass", "client")
             .ok_or_else(|| "Fabric metadata did not include client main class".to_string())?,
         server_main_class: json_object_string(&metadata, "mainClass", "server")
@@ -617,8 +636,53 @@ fn resolve_loader_metadata(
     }))
 }
 
+fn resolve_neoforge_loader_metadata(
+    config: &Config,
+    instance: &Instance,
+    root: &Path,
+) -> Result<Option<LoaderMetadata>, String> {
+    let Some(url) = neoforge_meta_url() else {
+        return Ok(None);
+    };
+    let metadata = loader_metadata_text(config, root, "neoforge", &url, instance)?;
+
+    Ok(Some(LoaderMetadata {
+        kind: "neoforge".to_string(),
+        version: json_string(&metadata, "version")
+            .unwrap_or_else(|| instance.loader_version.clone().unwrap_or_else(|| "latest".to_string())),
+        loader_maven: None,
+        intermediary_maven: None,
+        installer_maven: Some(
+            json_string(&metadata, "installer_maven")
+                .ok_or_else(|| "NeoForge metadata did not include installer maven coordinate".to_string())?,
+        ),
+        client_main_class: json_string(&metadata, "client_main_class")
+            .ok_or_else(|| "NeoForge metadata did not include client main class".to_string())?,
+        server_main_class: json_string(&metadata, "server_main_class")
+            .ok_or_else(|| "NeoForge metadata did not include server main class".to_string())?,
+    }))
+}
+
+fn loader_metadata_text(
+    config: &Config,
+    root: &Path,
+    loader: &str,
+    url: &str,
+    instance: &Instance,
+) -> Result<String, String> {
+    let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let cache_dir = dirs.cache.join("downloads").join(loader);
+    let path = fetch_to_cache(url, &cache_dir, &format!("{}-loader.json", instance.minecraft))?;
+    fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))
+}
+
 fn fabric_meta_url() -> Option<String> {
     env::var("MODSTAGE_FABRIC_META_URL").ok()
+}
+
+fn neoforge_meta_url() -> Option<String> {
+    env::var("MODSTAGE_NEOFORGE_META_URL").ok()
 }
 
 fn resolve_minecraft_metadata(
