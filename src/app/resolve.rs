@@ -88,19 +88,30 @@ sides = [{}]\n",
             "{lock}\n[loader]\nkind = \"{}\"\nversion = \"{}\"\n",
             loader.kind, loader.version
         );
-        if let Some(loader_maven) = loader.loader_maven {
+        if let Some(loader_maven) = &loader.loader_maven {
             lock.push_str(&format!("loader_maven = \"{loader_maven}\"\n"));
         }
-        if let Some(intermediary_maven) = loader.intermediary_maven {
+        if let Some(intermediary_maven) = &loader.intermediary_maven {
             lock.push_str(&format!("intermediary_maven = \"{intermediary_maven}\"\n"));
         }
-        if let Some(installer_maven) = loader.installer_maven {
+        if let Some(installer_maven) = &loader.installer_maven {
             lock.push_str(&format!("installer_maven = \"{installer_maven}\"\n"));
         }
         lock.push_str(&format!(
             "client_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
             loader.client_main_class, loader.server_main_class
         ));
+        for coordinate in [
+            loader.loader_maven.as_deref(),
+            loader.intermediary_maven.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(entry) = resolved_maven_library(&config.repositories, coordinate)? {
+                lock.push_str(&entry);
+            }
+        }
         lock
     } else {
         lock
@@ -170,4 +181,26 @@ sides = [{}]\n",
     println!("resolved {} into {}", instance.name, lock_path.display());
 
     Ok(())
+}
+
+fn resolved_maven_library(repositories: &[(String, String)], coordinate: &str) -> Result<Option<String>, String> {
+    let Some(coordinates) = MavenCoordinates::parse_coordinate(coordinate) else {
+        return Ok(None);
+    };
+    let Some((repository, path)) = maven_artifact(repositories, &coordinates) else {
+        return Ok(None);
+    };
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve Maven artifact {}: {error}", path.display()))?;
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("failed to read Maven artifact {}: {error}", path.display()))?;
+
+    Ok(Some(format!(
+        "\n[[library]]\nname = \"{}\"\nrepository = \"{}\"\npath = \"{}\"\nsha256 = \"{}\"\n",
+        coordinate,
+        repository,
+        path.display(),
+        sha256_hex(&bytes)
+    )))
 }

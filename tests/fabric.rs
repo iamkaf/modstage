@@ -116,3 +116,108 @@ sides = ["client", "server"]
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
+
+#[test]
+fn resolve_adds_fabric_loader_artifacts_to_the_launch_classpath() {
+    let project = temp_dir("fabric-classpath-project");
+    let metadata = temp_dir("fabric-classpath-metadata");
+    let data_home = temp_dir("fabric-classpath-data");
+    let cache_home = temp_dir("fabric-classpath-cache");
+    let repo = metadata.join("repo");
+    let loader_dir = repo
+        .join("net")
+        .join("fabricmc")
+        .join("fabric-loader")
+        .join("0.16.14");
+    let intermediary_dir = repo
+        .join("net")
+        .join("fabricmc")
+        .join("intermediary")
+        .join("26.1.2");
+    fs::create_dir_all(&loader_dir).expect("failed to create loader artifact dir");
+    fs::create_dir_all(&intermediary_dir).expect("failed to create intermediary artifact dir");
+    fs::write(loader_dir.join("fabric-loader-0.16.14.jar"), b"loader")
+        .expect("failed to write loader jar");
+    fs::write(intermediary_dir.join("intermediary-26.1.2.jar"), b"intermediary")
+        .expect("failed to write intermediary jar");
+    let fabric_metadata = metadata.join("fabric-loader.json");
+    fs::write(
+        &fabric_metadata,
+        r#"[{
+  "loader": {
+    "version": "0.16.14",
+    "maven": "net.fabricmc:fabric-loader:0.16.14"
+  },
+  "intermediary": {
+    "maven": "net.fabricmc:intermediary:26.1.2"
+  },
+  "launcherMeta": {
+    "mainClass": {
+      "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+    }
+  }
+}]"#,
+    )
+    .expect("failed to write fabric metadata");
+    fs::write(
+        project.join("modstage.toml"),
+        format!(
+            r#"[project]
+name = "fabric-classpath-test"
+
+[repositories]
+fabric = "file://{}"
+
+[[instance]]
+name = "fabric-classpath-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+"#,
+            repo.display()
+        ),
+    )
+    .expect("failed to write config");
+
+    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let output = run_in_with_env(
+        &["resolve", "fabric-classpath-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_FABRIC_META_URL", &fabric_url),
+            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
+            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+
+    for expected in [
+        "[[library]]",
+        r#"name = "net.fabricmc:fabric-loader:0.16.14""#,
+        r#"name = "net.fabricmc:intermediary:26.1.2""#,
+        r#"repository = "fabric""#,
+        r#"sha256 = "d47712cceb4c780603026e6325221c1bcff90679ebc076baa51c71ebe796717c""#,
+        r#"sha256 = "37aa37290af965ab652c6843ca9310bba154d0561a763685bbb6cc4063f5d9b2""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}

@@ -212,6 +212,10 @@ struct MavenCoordinates<'a> {
 impl<'a> MavenCoordinates<'a> {
     fn parse(source: &'a str) -> Option<Self> {
         let source = source.strip_prefix("maven:")?;
+        Self::parse_coordinate(source)
+    }
+
+    fn parse_coordinate(source: &'a str) -> Option<Self> {
         let mut parts = source.split(':');
         let group = parts.next()?;
         let artifact = parts.next()?;
@@ -278,4 +282,3 @@ fn maven_local_root() -> Option<PathBuf> {
 
     Some(home_dir().ok()?.join(".m2").join("repository"))
 }
-
