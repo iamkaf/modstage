@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 const ROOT_HELP: &str = "\
 modstage
@@ -69,10 +69,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("clean is not implemented yet");
             Ok(())
         }
-        [command, ..] if command == "java" => {
-            println!("java is not implemented yet");
+        [command, subject] if command == "java" && subject == "list" => java_list(),
+        [command, subject, rest @ ..] if command == "java" && subject == "doctor" => {
+            java_doctor(rest)
+        }
+        [command, subject, _major] if command == "java" && subject == "install" => {
+            println!("java install is not implemented yet");
             Ok(())
         }
+        [command, ..] if command == "java" => Err("unknown java command".to_string()),
         [command, ..] => Err(format!("unknown command `{command}`\n\n{ROOT_HELP}")),
         [] => unreachable!("empty args handled above"),
     }
@@ -402,6 +407,153 @@ fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
             .filter(|item| !item.is_empty())
             .collect(),
     )
+}
+
+fn java_list() -> Result<(), String> {
+    let runtimes = discover_java_runtimes();
+
+    if runtimes.is_empty() {
+        return Err("no Java runtimes found on PATH".to_string());
+    }
+
+    for runtime in runtimes {
+        let info = inspect_java(&runtime)?;
+        print_java_info(&runtime, &info);
+    }
+
+    Ok(())
+}
+
+fn java_doctor(args: &[String]) -> Result<(), String> {
+    let java = parse_java_arg(args)?.unwrap_or_else(|| PathBuf::from(java_bin()));
+    let info = inspect_java(&java)?;
+
+    print_java_info(&java, &info);
+
+    Ok(())
+}
+
+fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
+    let mut java = None;
+    let mut iter = args.iter();
+
+    while let Some(arg) = iter.next() {
+        if arg == "--java" {
+            let path = iter
+                .next()
+                .ok_or_else(|| "--java requires a path".to_string())?;
+            java = Some(PathBuf::from(path));
+        } else {
+            return Err(format!("unknown java doctor option `{arg}`"));
+        }
+    }
+
+    Ok(java)
+}
+
+fn discover_java_runtimes() -> Vec<PathBuf> {
+    let Some(path) = env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let mut runtimes = Vec::new();
+
+    for dir in env::split_paths(&path) {
+        let candidate = dir.join(java_bin());
+        if candidate.is_file() && !runtimes.contains(&candidate) {
+            runtimes.push(candidate);
+        }
+    }
+
+    runtimes
+}
+
+fn inspect_java(java: &Path) -> Result<JavaInfo, String> {
+    let output = Command::new(java)
+        .args(["-XshowSettings:properties", "-version"])
+        .output()
+        .map_err(|error| format!("failed to run {}: {error}", java.display()))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "{} failed Java validation with status {}",
+            java.display(),
+            output.status
+        ));
+    }
+
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let version = property(&text, "java.version")
+        .ok_or_else(|| format!("{} did not report java.version", java.display()))?;
+    let arch = property(&text, "os.arch")
+        .ok_or_else(|| format!("{} did not report os.arch", java.display()))?;
+    let major = java_major(&version)?;
+
+    Ok(JavaInfo {
+        version,
+        major,
+        arch,
+    })
+}
+
+fn property(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        if name.trim() == key {
+            return Some(value.trim().to_string());
+        }
+    }
+
+    None
+}
+
+fn java_major(version: &str) -> Result<u32, String> {
+    let mut parts = version.split('.');
+    let first = parts
+        .next()
+        .ok_or_else(|| format!("invalid Java version `{version}`"))?;
+    let major = if first == "1" {
+        parts
+            .next()
+            .ok_or_else(|| format!("invalid Java version `{version}`"))?
+    } else {
+        first
+    };
+    let major = major
+        .split_once('-')
+        .map_or(major, |(before_dash, _)| before_dash);
+
+    major
+        .parse()
+        .map_err(|error| format!("invalid Java version `{version}`: {error}"))
+}
+
+fn print_java_info(java: &Path, info: &JavaInfo) {
+    println!("java: {}", java.display());
+    println!("version: {}", info.version);
+    println!("major: {}", info.major);
+    println!("arch: {}", info.arch);
+}
+
+struct JavaInfo {
+    version: String,
+    major: u32,
+    arch: String,
+}
+
+fn java_bin() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "java.exe"
+    } else {
+        "java"
+    }
 }
 
 struct StateDirs {
