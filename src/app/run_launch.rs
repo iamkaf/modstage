@@ -50,9 +50,16 @@ pub(super) fn launch_minecraft_instance(
         launch_args.push("-cp".to_string());
         launch_args.push(classpath);
         launch_args.push(main_class);
-        for arg in launch_game_arguments(instance, side, locked_arguments(root, &instance.name, "game")?) {
+        let game_args =
+            launch_game_arguments(instance, side, locked_arguments(root, &instance.name, "game")?);
+        let has_nogui = game_args.iter().any(|arg| arg == "nogui");
+        for arg in game_args {
             command.arg(&arg);
             launch_args.push(arg);
+        }
+        if side == "server" && !has_nogui {
+            command.arg("nogui");
+            launch_args.push("nogui".to_string());
         }
         if side == "client"
             && let Some(asset_index) = locked_value(root, &instance.name, "id")?

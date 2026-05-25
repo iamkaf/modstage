@@ -1337,7 +1337,7 @@ fn run_server_stops_after_minecraft_ready_log() {
     let fake_java = metadata.join("fake-java-ready");
     fs::write(
         &fake_java,
-        "#!/bin/sh\nprintf 'Done (0.123s)! For help, type \"help\"\\n'\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" > stop-command.txt\n  if [ \"$line\" = stop ]; then\n    printf 'server stopped cleanly\\n'\n    exit 0\n  fi\ndone\nexit 19\n",
+        "#!/bin/sh\nmkdir -p logs\nprintf 'Failed to load properties from file: server.properties\\nfabric-resource-loader initialized\\nKnotServer launched\\n' > logs/latest.log\nprintf 'Done (0.123s)! For help, type \"help\"\\n'\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" > stop-command.txt\n  if [ \"$line\" = stop ]; then\n    printf 'server stopped cleanly\\n'\n    exit 0\n  fi\ndone\nexit 19\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)
@@ -3427,8 +3427,9 @@ sides = ["server"]
             && java_args.contains("server.jar")
             && !java_args.contains("neoforge-4.0.0.jar")
             && java_args.contains("cpw.mods.bootstraplauncher.BootstrapLauncher")
+            && java_args.contains("nogui")
             && !java_args.contains("-jar"),
-        "NeoForge server launch should use the loader main class and loader libraries\n{java_args}"
+        "NeoForge server launch should use the loader main class, loader libraries, and nogui\n{java_args}"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");

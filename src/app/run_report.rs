@@ -34,10 +34,13 @@ pub(super) fn classify_failure(
         if lower.contains("missing") && lower.contains("depend") {
             return Ok("missing_dependency");
         }
-        if lower.contains("failed to load") && lower.contains("resource") {
+        if lower
+            .lines()
+            .any(|line| line.contains("failed to load") && line.contains("resource"))
+        {
             return Ok("resource_load");
         }
-        if lower.contains("bootstraplauncher") || lower.contains("knot") {
+        if !success && (lower.contains("bootstraplauncher") || lower.contains("knot")) {
             return Ok("loader_bootstrap");
         }
     }
