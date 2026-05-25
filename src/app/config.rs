@@ -13,6 +13,14 @@ pub(super) struct Instance {
     pub(super) loader_version: Option<String>,
     pub(super) sides: Vec<String>,
     pub(super) mods: Vec<String>,
+    pub(super) fixtures: Vec<Fixture>,
+}
+
+pub(super) struct Fixture {
+    pub(super) from: String,
+    pub(super) to: String,
+    pub(super) side: Option<String>,
+    pub(super) replace: bool,
 }
 
 impl Config {
@@ -24,6 +32,7 @@ impl Config {
         let mut repositories = Vec::new();
         let mut instances = Vec::new();
         let mut current: Option<Instance> = None;
+        let mut current_fixture: Option<Fixture> = None;
         let mut multiline_array: Option<(String, Vec<String>)> = None;
 
         for line in contents.lines() {
@@ -50,6 +59,11 @@ impl Config {
             }
 
             if line == "[[instance]]" {
+                if let Some(fixture) = current_fixture.take()
+                    && let Some(instance) = current.as_mut()
+                {
+                    instance.fixtures.push(fixture);
+                }
                 if let Some(instance) = current.take() {
                     instances.push(instance);
                 }
@@ -62,6 +76,24 @@ impl Config {
                     loader_version: None,
                     sides: Vec::new(),
                     mods: Vec::new(),
+                    fixtures: Vec::new(),
+                });
+                continue;
+            }
+
+            if line == "[[instance.fixture]]" {
+                if let Some(fixture) = current_fixture.take()
+                    && let Some(instance) = current.as_mut()
+                {
+                    instance.fixtures.push(fixture);
+                }
+
+                section = "fixture";
+                current_fixture = Some(Fixture {
+                    from: String::new(),
+                    to: ".".to_string(),
+                    side: None,
+                    replace: false,
                 });
                 continue;
             }
@@ -74,6 +106,23 @@ impl Config {
             if section == "repositories" {
                 if let Some((name, url)) = key_value(line) {
                     repositories.push((name, url));
+                }
+                continue;
+            }
+
+            if section == "fixture" {
+                let Some(fixture) = current_fixture.as_mut() else {
+                    continue;
+                };
+
+                if let Some(value) = string_value(line, "from") {
+                    fixture.from = value;
+                } else if let Some(value) = string_value(line, "to") {
+                    fixture.to = value;
+                } else if let Some(value) = string_value(line, "side") {
+                    fixture.side = Some(value);
+                } else if let Some(value) = bool_value(line, "replace") {
+                    fixture.replace = value;
                 }
                 continue;
             }
@@ -99,6 +148,12 @@ impl Config {
             }
         }
 
+        if let Some(fixture) = current_fixture.take()
+            && let Some(instance) = current.as_mut()
+        {
+            instance.fixtures.push(fixture);
+        }
+
         if let Some(instance) = current.take() {
             instances.push(instance);
         }
@@ -115,6 +170,14 @@ impl Config {
             }
             if instance.sides.is_empty() {
                 return Err(format!("instance `{}` is missing sides", instance.name));
+            }
+            for fixture in &instance.fixtures {
+                if fixture.from.is_empty() {
+                    return Err(format!("instance `{}` has a fixture missing from", instance.name));
+                }
+                if fixture.to.is_empty() {
+                    return Err(format!("instance `{}` has a fixture missing to", instance.name));
+                }
             }
         }
 
@@ -177,6 +240,16 @@ pub(super) fn string_value(line: &str, key: &str) -> Option<String> {
 pub(super) fn key_value(line: &str) -> Option<(String, String)> {
     let (key, value) = line.split_once('=')?;
     Some((key.trim().to_string(), value.trim().trim_matches('"').to_string()))
+}
+
+pub(super) fn bool_value(line: &str, key: &str) -> Option<bool> {
+    let value = line.strip_prefix(key)?.trim_start();
+    let value = value.strip_prefix('=')?.trim();
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 pub(super) fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {

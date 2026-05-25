@@ -46,6 +46,7 @@ pub(super) fn run_instance(
     fs::create_dir_all(&mods_dir)
         .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
     reconcile_mods(root, instance, &mods_dir)?;
+    apply_fixtures(root, side, instance, &game_dir)?;
 
     if side == "server" {
         fs::write(game_dir.join("eula.txt"), "eula=true\n")
@@ -440,6 +441,64 @@ pub(super) fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) 
             .ok_or_else(|| format!("resolved mod has no filename: {}", path.display()))?;
         fs::copy(&path, mods_dir.join(file_name))
             .map_err(|error| format!("failed to stage mod {}: {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn apply_fixtures(
+    root: &Path,
+    side: &str,
+    instance: &Instance,
+    game_dir: &Path,
+) -> Result<(), String> {
+    for fixture in &instance.fixtures {
+        if let Some(fixture_side) = &fixture.side
+            && fixture_side != side
+        {
+            continue;
+        }
+
+        let source = root.join(&fixture.from);
+        let destination = game_dir.join(&fixture.to);
+        copy_fixture_tree(&source, &destination, fixture.replace)?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn copy_fixture_tree(source: &Path, destination: &Path, replace: bool) -> Result<(), String> {
+    if source.is_file() {
+        if destination.exists() && !replace {
+            return Ok(());
+        }
+
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::copy(source, destination)
+            .map_err(|error| format!("failed to copy fixture {}: {error}", source.display()))?;
+        return Ok(());
+    }
+
+    if !source.is_dir() {
+        return Err(format!("fixture source {} does not exist", source.display()));
+    }
+
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("failed to read fixture {}: {error}", source.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read fixture entry: {error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_fixture_tree(&source_path, &destination_path, replace)?;
+        } else if source_path.is_file() {
+            copy_fixture_tree(&source_path, &destination_path, replace)?;
+        }
     }
 
     Ok(())
