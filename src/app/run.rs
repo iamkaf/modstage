@@ -30,7 +30,7 @@ pub(super) fn run_instance(
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
-    if !options.locked && !lock_path.is_file() {
+    if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
         resolve_instance(Some(config_path.clone()), Some(selected))?;
     }
     let dirs = StateDirs::for_project(&config.project_name, root)?;
@@ -732,6 +732,16 @@ pub(super) fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBu
     }
 
     Ok(None)
+}
+
+pub(super) fn lock_is_stale_for_instance(lock_path: &Path, instance: &str) -> Result<bool, String> {
+    if !lock_path.is_file() {
+        return Ok(true);
+    }
+
+    let lock = fs::read_to_string(lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    Ok(!lock.contains(&format!("instance = \"{instance}\"")))
 }
 
 pub(super) fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
