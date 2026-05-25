@@ -127,6 +127,22 @@ mods = [
         "inspect run should print the run report\n{inspect_stdout}"
     );
 
+    let clean = run_in_with_env(
+        &["clean", "instance", "server-stage-26.1.2", "--side", "server"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        clean.status.success(),
+        "clean instance should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&clean.stdout),
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    assert!(
+        !instance_dir.exists(),
+        "clean instance --side server should remove the staged server game directory"
+    );
+
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");

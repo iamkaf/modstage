@@ -68,10 +68,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("inspect is not implemented yet");
             Ok(())
         }
-        [command, ..] if command == "clean" => {
-            println!("clean is not implemented yet");
+        [command, subject, instance, rest @ ..] if command == "clean" && subject == "instance" => {
+            clean_instance(invocation.config, instance, rest)
+        }
+        [command, subject] if command == "clean" && subject == "cache" => {
+            println!("clean cache is not implemented yet");
             Ok(())
         }
+        [command, ..] if command == "clean" => Err("unknown clean command".to_string()),
         [command, subject] if command == "java" && subject == "list" => java_list(),
         [command, subject, rest @ ..] if command == "java" && subject == "doctor" => {
             java_doctor(rest)
@@ -205,6 +209,57 @@ fn inspect_run(explicit_config: Option<PathBuf>, run_id: &str) -> Result<(), Str
     print!("{report}");
 
     Ok(())
+}
+
+fn clean_instance(
+    explicit_config: Option<PathBuf>,
+    instance_name: &str,
+    args: &[String],
+) -> Result<(), String> {
+    let config_path = config_path(explicit_config)?;
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let project_name = project_name(&contents)
+        .ok_or_else(|| format!("missing [project] name in {}", config_path.display()))?;
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let dirs = StateDirs::for_project(&project_name, root)?;
+    let mut target = dirs
+        .data
+        .join("instances")
+        .join(&dirs.project_id)
+        .join(instance_name);
+
+    if let Some(side) = parse_side_arg(args)? {
+        target = target.join(side);
+    }
+
+    if target.exists() {
+        fs::remove_dir_all(&target)
+            .map_err(|error| format!("failed to remove {}: {error}", target.display()))?;
+    }
+
+    println!("removed {}", target.display());
+
+    Ok(())
+}
+
+fn parse_side_arg(args: &[String]) -> Result<Option<&str>, String> {
+    let mut side = None;
+    let mut iter = args.iter();
+
+    while let Some(arg) = iter.next() {
+        if arg == "--side" {
+            side = Some(
+                iter.next()
+                    .ok_or_else(|| "--side requires client or server".to_string())?
+                    .as_str(),
+            );
+        } else {
+            return Err(format!("unknown clean instance option `{arg}`"));
+        }
+    }
+
+    Ok(side)
 }
 
 fn init_project() -> Result<(), String> {
