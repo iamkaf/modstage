@@ -80,9 +80,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         [command, subject, rest @ ..] if command == "java" && subject == "doctor" => {
             java_doctor(rest)
         }
-        [command, subject, _major] if command == "java" && subject == "install" => {
-            println!("java install is not implemented yet");
-            Ok(())
+        [command, subject, major] if command == "java" && subject == "install" => {
+            java_install(major)
         }
         [command, ..] if command == "java" => Err("unknown java command".to_string()),
         [command, ..] => Err(format!("unknown command `{command}`\n\n{ROOT_HELP}")),
@@ -1090,6 +1089,42 @@ fn java_doctor(args: &[String]) -> Result<(), String> {
     print_java_info(&java, &info);
 
     Ok(())
+}
+
+fn java_install(major: &str) -> Result<(), String> {
+    let major: u32 = major
+        .parse()
+        .map_err(|error| format!("invalid Java major version `{major}`: {error}"))?;
+    let metadata_url = azul_metadata_url(major)?;
+    let cache_dir = cache_home()?.join("modstage").join("downloads").join("java");
+    let metadata_path = fetch_to_cache(&metadata_url, &cache_dir, &format!("azul-{major}.json"))?;
+    let metadata = fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
+    let download_url = json_string(&metadata, "download_url")
+        .ok_or_else(|| "Azul metadata did not include download_url".to_string())?;
+    let archive_name = json_string(&metadata, "name")
+        .unwrap_or_else(|| format!("zulu-java-{major}.zip"));
+    let archive_path = fetch_to_cache(&download_url, &cache_dir, &archive_name)?;
+    let archive = fs::read(&archive_path)
+        .map_err(|error| format!("failed to read {}: {error}", archive_path.display()))?;
+
+    println!("java major: {major}");
+    println!("java archive: {}", archive_path.display());
+    println!("sha256: {}", sha256_hex(&archive));
+
+    Ok(())
+}
+
+fn azul_metadata_url(major: u32) -> Result<String, String> {
+    if let Ok(url) = env::var("MODSTAGE_AZUL_METADATA_URL") {
+        return Ok(url);
+    }
+
+    Ok(format!(
+        "https://api.azul.com/metadata/v1/zulu/packages?arch={}&java_version={major}&os={}&archive_type=zip&javafx_bundled=false&java_package_type=jre&page_size=1",
+        env::consts::ARCH,
+        env::consts::OS
+    ))
 }
 
 fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {
