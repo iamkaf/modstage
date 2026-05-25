@@ -376,7 +376,7 @@ sides = [{}]\n",
                 sha256_hex(&bytes)
             ));
         } else if let Some(coordinates) = MavenCoordinates::parse(source) {
-            let Some(path) = maven_local_artifact(&coordinates) else {
+            let Some((repository, path)) = maven_artifact(&config.repositories, &coordinates) else {
                 continue;
             };
             let path = path
@@ -385,8 +385,9 @@ sides = [{}]\n",
             let bytes = fs::read(&path)
                 .map_err(|error| format!("failed to read Maven artifact {}: {error}", path.display()))?;
             lock.push_str(&format!(
-                "\n[[mod]]\nsource = \"{}\"\nrepository = \"mavenLocal\"\npath = \"{}\"\nsha256 = \"{}\"\n",
+                "\n[[mod]]\nsource = \"{}\"\nrepository = \"{}\"\npath = \"{}\"\nsha256 = \"{}\"\n",
                 source,
+                repository,
                 path.display(),
                 sha256_hex(&bytes)
             ));
@@ -506,7 +507,9 @@ fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, Strin
     }
 
     if let Some(coordinates) = MavenCoordinates::parse(source) {
-        return Ok(maven_local_artifact(&coordinates).and_then(|path| path.canonicalize().ok()));
+        return Ok(maven_artifact(&[], &coordinates)
+            .map(|(_, path)| path)
+            .and_then(|path| path.canonicalize().ok()));
     }
 
     Ok(None)
@@ -760,9 +763,33 @@ impl<'a> MavenCoordinates<'a> {
     }
 }
 
+fn maven_artifact(
+    repositories: &[(String, String)],
+    coordinates: &MavenCoordinates<'_>,
+) -> Option<(String, PathBuf)> {
+    for (name, url) in repositories {
+        if url == "mavenLocal" {
+            if let Some(path) = maven_local_artifact(coordinates) {
+                return Some((name.clone(), path));
+            }
+        } else if let Some(root) = url.strip_prefix("file://")
+            && let Some(path) = maven_artifact_under(PathBuf::from(root), coordinates)
+        {
+            return Some((name.clone(), path));
+        }
+    }
+
+    maven_local_artifact(coordinates).map(|path| ("mavenLocal".to_string(), path))
+}
+
 fn maven_local_artifact(coordinates: &MavenCoordinates<'_>) -> Option<PathBuf> {
-    let root = maven_local_root()?;
-    let mut path = root;
+    maven_artifact_under(maven_local_root()?, coordinates)
+}
+
+fn maven_artifact_under(
+    mut path: PathBuf,
+    coordinates: &MavenCoordinates<'_>,
+) -> Option<PathBuf> {
 
     for segment in coordinates.group.split('.') {
         path.push(segment);

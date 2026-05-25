@@ -250,6 +250,72 @@ mods = [
     fs::remove_dir_all(project).expect("failed to remove temp project");
 }
 
+#[test]
+fn resolve_uses_ordered_file_maven_repositories_for_single_jar_mods() {
+    let project = temp_project("resolve-file-repo");
+    let repo = project.join("repo");
+    let artifact_dir = repo
+        .join("com")
+        .join("example")
+        .join("example-mod")
+        .join("1.0.0");
+    fs::create_dir_all(&artifact_dir).expect("failed to create file repository artifact dir");
+    fs::write(artifact_dir.join("example-mod-1.0.0.jar"), b"abc")
+        .expect("failed to write repository jar");
+    fs::write(
+        project.join("modstage.toml"),
+        &format!(
+            r#"[project]
+name = "resolve-file-repo"
+
+[repositories]
+missing = "file://{}/missing"
+local = "file://{}"
+
+[[instance]]
+name = "file-repo-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["client", "server"]
+mods = [
+  "maven:com.example:example-mod:1.0.0",
+]
+"#,
+            project.display(),
+            repo.display()
+        ),
+    )
+    .expect("failed to write config");
+
+    let output = run_in(&["resolve", "file-repo-26.1.2"], &project);
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+    let jar_path = artifact_dir.join("example-mod-1.0.0.jar");
+
+    for expected in [
+        "[[mod]]",
+        r#"source = "maven:com.example:example-mod:1.0.0""#,
+        r#"repository = "local""#,
+        &format!(r#"path = "{}""#, jar_path.display()),
+        r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
+
 fn run_in_with_env(args: &[&str], cwd: &Path, envs: &[(&str, &Path)]) -> Output {
     let mut command = modstage();
     command.args(args).current_dir(cwd);
