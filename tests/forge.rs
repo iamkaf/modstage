@@ -372,6 +372,15 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
             "version.json",
             br#"{
   "mainClass": "net.minecraftforge.bootstrap.ForgeBootstrap",
+  "arguments": {
+    "game": [
+      "--launchTarget",
+      "forge_client"
+    ],
+    "jvm": [
+      "-Dforge.test=true"
+    ]
+  },
   "libraries": [
     {
       "name": "cpw.mods:bootstraplauncher:2.0.0",
@@ -487,6 +496,11 @@ sides = ["client", "server"]
     for expected in [
         r#"client_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap""#,
         r#"server_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap""#,
+        r#"kind = "jvm""#,
+        r#"arg = "-Dforge.test=true""#,
+        r#"kind = "game""#,
+        r#"arg = "--launchTarget""#,
+        r#"arg = "forge_client""#,
         r#"name = "cpw.mods:bootstraplauncher:2.0.0""#,
         r#"url = "https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar""#,
         r#"sha256 = "603eb608091a4fb09e0c529d8eaa13fcc9c12b21dc8abd170f7f030217c7c729""#,

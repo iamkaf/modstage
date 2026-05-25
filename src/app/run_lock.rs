@@ -178,6 +178,27 @@ pub(super) fn locked_java_major(root: &Path, instance: &str) -> Result<Option<u3
         .transpose()
 }
 
+pub(super) fn locked_arguments(
+    root: &Path,
+    instance: &str,
+    kind: &str,
+) -> Result<Vec<String>, String> {
+    let Some(lock) = locked_instance_block(root, instance)? else {
+        return Ok(Vec::new());
+    };
+    let mut args = Vec::new();
+
+    for block in lock.split("[[argument]]").skip(1) {
+        if block_string_value(block, "kind").as_deref() == Some(kind)
+            && let Some(arg) = block_string_value(block, "arg")
+        {
+            args.push(arg);
+        }
+    }
+
+    Ok(args)
+}
+
 pub(super) fn fetch_locked_libraries(
     root: &Path,
     instance: &str,

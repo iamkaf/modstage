@@ -9,6 +9,8 @@ pub(in crate::app) struct InstallerProfileLibrary {
 
 pub(in crate::app) struct InstallerProfile {
     pub(in crate::app) main_class: Option<String>,
+    pub(in crate::app) jvm_args: Vec<String>,
+    pub(in crate::app) game_args: Vec<String>,
     pub(in crate::app) libraries: Vec<InstallerProfileLibrary>,
 }
 
@@ -19,10 +21,14 @@ pub(in crate::app) fn resolve_installer_profile(
     let Some(version_json) = jar_entry_text(installer_path, &["version.json", "/version.json"])? else {
         return Ok(InstallerProfile {
             main_class: None,
+            jvm_args: Vec::new(),
+            game_args: Vec::new(),
             libraries: Vec::new(),
         });
     };
     let main_class = json_string(&version_json, "mainClass");
+    let jvm_args = profile_arguments(&version_json, "jvm");
+    let game_args = profile_arguments(&version_json, "game");
     let mut libraries = Vec::new();
 
     for block in minecraft_library_blocks(&version_json) {
@@ -60,25 +66,44 @@ pub(in crate::app) fn resolve_installer_profile(
 
     Ok(InstallerProfile {
         main_class,
+        jvm_args,
+        game_args,
         libraries,
     })
+}
+
+pub(in crate::app) fn profile_arguments(version_json: &str, kind: &str) -> Vec<String> {
+    let Some(arguments) = json_object_after(version_json, "arguments") else {
+        return Vec::new();
+    };
+    json_string_array(arguments, kind).unwrap_or_default()
 }
 
 pub(in crate::app) fn jar_entry_text(
     jar_path: &Path,
     entries: &[&str],
 ) -> Result<Option<String>, String> {
+    jar_entry_bytes(jar_path, entries).and_then(|entry| {
+        entry
+            .map(String::from_utf8)
+            .transpose()
+            .map_err(|error| format!("installer jar entry is not UTF-8: {error}"))
+    })
+}
+
+pub(in crate::app) fn jar_entry_bytes(
+    jar_path: &Path,
+    entries: &[&str],
+) -> Result<Option<Vec<u8>>, String> {
     let bytes = fs::read(jar_path)
-        .map_err(|error| format!("failed to read installer jar {}: {error}", jar_path.display()))?;
+        .map_err(|error| format!("failed to read jar {}: {error}", jar_path.display()))?;
 
     match stored_zip_entry(&bytes, entries) {
-        Ok(Some(contents)) => String::from_utf8(contents)
-            .map(Some)
-            .map_err(|error| format!("installer jar entry is not UTF-8: {error}")),
+        Ok(Some(contents)) => Ok(Some(contents)),
         Ok(None) => Ok(None),
-        Err(ZipReadError::UnsupportedCompression) => jar_entry_text_with_tool(jar_path, entries),
+        Err(ZipReadError::UnsupportedCompression) => jar_entry_bytes_with_tool(jar_path, entries),
         Err(ZipReadError::Malformed(message)) => Err(format!(
-            "failed to read installer jar {}: {message}",
+            "failed to read jar {}: {message}",
             jar_path.display()
         )),
     }
@@ -176,7 +201,7 @@ fn checked_add(left: usize, right: usize) -> Result<usize, ZipReadError> {
         .ok_or_else(|| ZipReadError::Malformed("zip offset overflow".to_string()))
 }
 
-fn jar_entry_text_with_tool(jar_path: &Path, entries: &[&str]) -> Result<Option<String>, String> {
+fn jar_entry_bytes_with_tool(jar_path: &Path, entries: &[&str]) -> Result<Option<Vec<u8>>, String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("system clock is before UNIX_EPOCH: {error}"))?
@@ -204,10 +229,10 @@ fn jar_entry_text_with_tool(jar_path: &Path, entries: &[&str]) -> Result<Option<
 
         let extracted = temp.join(entry);
         if extracted.is_file() {
-            let text = fs::read_to_string(&extracted)
+            let bytes = fs::read(&extracted)
                 .map_err(|error| format!("failed to read {}: {error}", extracted.display()))?;
             let _ = fs::remove_dir_all(&temp);
-            return Ok(Some(text));
+            return Ok(Some(bytes));
         }
     }
 

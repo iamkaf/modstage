@@ -184,6 +184,20 @@ sides = [{}]\n",
             "client_main_class = \"{}\"\nserver_main_class = \"{}\"\n",
             client_main_class, server_main_class
         ));
+        if let Some(profile) = &installer_profile {
+            for arg in &profile.jvm_args {
+                lock.push_str(&format!(
+                    "\n[[argument]]\nkind = \"jvm\"\narg = \"{}\"\n",
+                    toml_escape(arg)
+                ));
+            }
+            for arg in &profile.game_args {
+                lock.push_str(&format!(
+                    "\n[[argument]]\nkind = \"game\"\narg = \"{}\"\n",
+                    toml_escape(arg)
+                ));
+            }
+        }
         for resolved in resolved_loader_libraries {
             lock.push_str(&resolved.entry);
         }

@@ -46,6 +46,34 @@ pub(in crate::app) fn json_object_string(text: &str, object_key: &str, value_key
     json_string(&text[object_start..], value_key)
 }
 
+pub(in crate::app) fn json_string_array(text: &str, key: &str) -> Option<Vec<String>> {
+    let key_start = text.find(&format!("\"{key}\""))?;
+    let after_key = &text[key_start + key.len() + 2..];
+    let colon = after_key.find(':')?;
+    let rest = after_key[colon + 1..].trim_start();
+    let rest = rest.strip_prefix('[')?;
+    let mut values = Vec::new();
+    let mut remaining = rest;
+
+    loop {
+        remaining = remaining.trim_start();
+        if remaining.starts_with(']') {
+            return Some(values);
+        }
+        remaining = remaining.strip_prefix('"')?;
+        let end = remaining.find('"')?;
+        values.push(remaining[..end].to_string());
+        remaining = remaining[end + 1..].trim_start();
+        if remaining.starts_with(',') {
+            remaining = &remaining[1..];
+        } else if remaining.starts_with(']') {
+            return Some(values);
+        } else {
+            return None;
+        }
+    }
+}
+
 pub(in crate::app) fn json_u32(text: &str, key: &str) -> Option<u32> {
     let key_start = text.find(&format!("\"{key}\""))?;
     let after_key = &text[key_start + key.len() + 2..];

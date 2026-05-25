@@ -15,12 +15,30 @@ pub(super) fn launch_minecraft_instance(
     let artifact_name = format!("{side}.jar");
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
     verify_locked_artifact_hash(root, &instance.name, side, &artifact)?;
+    let main_class = locked_main_class(root, &instance.name, side)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
     let java = selected_java(root, instance, options)?;
     let mut command = Command::new(&java);
     let mut launch_args = Vec::new();
-    if let Some(main_class) = locked_main_class(root, &instance.name, side)? {
-        let mut classpath = vec![artifact.clone()];
+    let mut launch_artifact = artifact.clone();
+    if side == "server"
+        && let Some(forge_launch) =
+            prepare_forge_server_launch(config, instance, root, &dirs, game_dir, &java)?
+    {
+        launch_artifact = forge_launch.artifact;
+        for arg in forge_launch.args {
+            command.arg(&arg);
+            launch_args.push(arg);
+        }
+    } else if let Some(main_class) = main_class {
+        if side == "server" {
+            launch_artifact = loader_server_artifact(&artifact, &cache_dir)?;
+        }
+        for arg in locked_arguments(root, &instance.name, "jvm")? {
+            command.arg(&arg);
+            launch_args.push(arg);
+        }
+        let mut classpath = vec![launch_artifact.clone()];
         classpath.extend(fetch_locked_libraries(
             root,
             &instance.name,
@@ -32,6 +50,10 @@ pub(super) fn launch_minecraft_instance(
         launch_args.push("-cp".to_string());
         launch_args.push(classpath);
         launch_args.push(main_class);
+        for arg in launch_game_arguments(instance, side, locked_arguments(root, &instance.name, "game")?) {
+            command.arg(&arg);
+            launch_args.push(arg);
+        }
         if side == "client"
             && let Some(asset_index) = locked_value(root, &instance.name, "id")?
         {
@@ -67,7 +89,7 @@ pub(super) fn launch_minecraft_instance(
         instance,
         side,
         &java,
-        &artifact,
+        &launch_artifact,
         scenario.as_deref(),
         run_dir,
         &launch_args,
@@ -148,6 +170,35 @@ pub(super) fn launch_minecraft_instance(
     })
 }
 
+pub(super) fn loader_server_artifact(artifact: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
+    let Some(versions_list) = jar_entry_text(artifact, &["META-INF/versions.list"])? else {
+        return Ok(artifact.to_path_buf());
+    };
+    let Some(entry) = versions_list.lines().find_map(|line| {
+        let mut columns = line.split('\t');
+        let _hash = columns.next()?;
+        let _version = columns.next()?;
+        columns.next()
+    }) else {
+        return Ok(artifact.to_path_buf());
+    };
+    let entry = format!("META-INF/versions/{entry}");
+    let Some(bytes) = jar_entry_bytes(artifact, &[&entry])? else {
+        return Ok(artifact.to_path_buf());
+    };
+    let destination = cache_dir
+        .join("versions")
+        .join(entry.rsplit('/').next().unwrap_or("server.jar"));
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    fs::write(&destination, bytes)
+        .map_err(|error| format!("failed to write {}: {error}", destination.display()))?;
+
+    Ok(destination)
+}
+
 pub(super) fn print_run_summary(
     instance: &Instance,
     side: &str,
@@ -194,4 +245,20 @@ pub(super) fn selected_java(
     }
 
     Ok(PathBuf::from(java_bin()))
+}
+
+pub(super) fn launch_game_arguments(
+    instance: &Instance,
+    side: &str,
+    args: Vec<String>,
+) -> Vec<String> {
+    args.into_iter()
+        .map(|arg| {
+            if instance.loader == "forge" && side == "server" && arg == "forge_client" {
+                "forge_server".to_string()
+            } else {
+                arg
+            }
+        })
+        .collect()
 }
