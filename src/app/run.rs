@@ -111,6 +111,7 @@ pub(super) fn run_instance(
 pub(super) struct RunOptions {
     locked: bool,
     java: Option<PathBuf>,
+    scenario: Option<PathBuf>,
     timeout: Option<String>,
 }
 
@@ -118,6 +119,7 @@ impl RunOptions {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut locked = false;
         let mut java = None;
+        let mut scenario = None;
         let mut timeout = None;
         let mut index = 0;
 
@@ -134,6 +136,13 @@ impl RunOptions {
                     java = Some(PathBuf::from(path));
                     index += 2;
                 }
+                "--scenario" => {
+                    let Some(path) = args.get(index + 1) else {
+                        return Err("--scenario requires a path".to_string());
+                    };
+                    scenario = Some(PathBuf::from(path));
+                    index += 2;
+                }
                 "--timeout" => {
                     let Some(value) = args.get(index + 1) else {
                         return Err("--timeout requires a duration".to_string());
@@ -148,6 +157,7 @@ impl RunOptions {
         Ok(Self {
             locked,
             java,
+            scenario,
             timeout,
         })
     }
@@ -180,6 +190,7 @@ pub(super) fn launch_minecraft_instance(
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let artifact_name = format!("{side}.jar");
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
+    let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
     let java = options
         .java
         .clone()
@@ -207,6 +218,11 @@ pub(super) fn launch_minecraft_instance(
         command.arg("nogui");
     } else {
         command.arg("-jar").arg(&artifact);
+    }
+    if let Some(scenario) = &scenario {
+        command.arg("--modstageScenario").arg(scenario);
+        command.env("MODSTAGE_RUN_DIR", run_dir);
+        command.env("MODSTAGE_ARTIFACT_DIR", run_dir.join("artifacts"));
     }
     command.current_dir(game_dir);
     let output = run_process_with_timeout(&mut command, options.timeout_duration()?)
@@ -236,7 +252,7 @@ pub(super) fn launch_minecraft_instance(
     fs::write(
         run_dir.join("run.toml"),
         format!(
-            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
+            "instance = \"{}\"\nside = \"{}\"\nstatus = \"{}\"\ngame_dir = \"{}\"\njava = \"{}\"\nartifact = \"{}\"\nscenario = \"{}\"\nexit_code = {}\ntimed_out = {}\ntimeout = \"{}\"\nfailure_class = \"{}\"\nstdout = \"{}\"\nstderr = \"{}\"\nminecraft_log = \"{}\"\ncrash_report = \"{}\"\n",
             instance.name,
             side,
             if timed_out {
@@ -249,6 +265,10 @@ pub(super) fn launch_minecraft_instance(
             game_dir.display(),
             java.display(),
             artifact.display(),
+            scenario
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             exit_code.unwrap_or(-1),
             timed_out,
             options.timeout.as_deref().unwrap_or(""),
@@ -294,6 +314,33 @@ pub(super) fn collect_run_artifacts(game_dir: &Path, run_dir: &Path) -> Result<R
         minecraft_log,
         crash_report,
     })
+}
+
+pub(super) fn stage_scenario(
+    root: &Path,
+    run_dir: &Path,
+    scenario: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(scenario) = scenario else {
+        return Ok(None);
+    };
+
+    let source = if scenario.is_absolute() {
+        scenario.to_path_buf()
+    } else {
+        root.join(scenario)
+    };
+    if !source.is_file() {
+        return Err(format!("scenario {} does not exist", source.display()));
+    }
+
+    let destination = run_dir.join("scenario.toml");
+    fs::copy(&source, &destination)
+        .map_err(|error| format!("failed to stage scenario {}: {error}", source.display()))?;
+    fs::create_dir_all(run_dir.join("artifacts"))
+        .map_err(|error| format!("failed to create run artifact directory: {error}"))?;
+
+    Ok(Some(destination))
 }
 
 pub(super) fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, String> {
