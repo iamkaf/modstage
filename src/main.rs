@@ -460,11 +460,12 @@ fn run_instance(
     explicit_config: Option<PathBuf>,
     side: &str,
     selected: &str,
-    _args: &[String],
+    args: &[String],
 ) -> Result<(), String> {
     if side != "client" && side != "server" {
         return Err(format!("unknown side `{side}`"));
     }
+    let options = RunOptions::parse(args)?;
 
     let config_path = config_path(explicit_config)?;
     let contents = fs::read_to_string(&config_path)
@@ -481,6 +482,10 @@ fn run_instance(
     }
 
     let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let lock_path = root.join("modstage.lock");
+    if options.locked && !lock_path.is_file() {
+        return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
+    }
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let game_dir = dirs
         .data
@@ -523,6 +528,35 @@ fn run_instance(
         game_dir.display(),
         run_dir.display()
     ))
+}
+
+struct RunOptions {
+    locked: bool,
+}
+
+impl RunOptions {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut locked = false;
+        let mut index = 0;
+
+        while index < args.len() {
+            match args[index].as_str() {
+                "--locked" => {
+                    locked = true;
+                    index += 1;
+                }
+                "--timeout" => {
+                    let Some(_timeout) = args.get(index + 1) else {
+                        return Err("--timeout requires a duration".to_string());
+                    };
+                    index += 2;
+                }
+                option => return Err(format!("unknown run option `{option}`")),
+            }
+        }
+
+        Ok(Self { locked })
+    }
 }
 
 fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {

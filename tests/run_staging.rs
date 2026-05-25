@@ -261,6 +261,59 @@ mods = [
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
 
+#[test]
+fn run_locked_requires_an_existing_lockfile_before_staging() {
+    let project = temp_dir("run-locked-project");
+    let data_home = temp_dir("run-locked-data");
+    let cache_home = temp_dir("run-locked-cache");
+    fs::create_dir_all(project.join("mods")).expect("failed to create mods dir");
+    fs::write(project.join("mods").join("example.jar"), b"abc")
+        .expect("failed to write local jar");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-locked"
+
+[[instance]]
+name = "locked-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["server"]
+mods = [
+  "./mods/example.jar",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in_with_env(
+        &["run", "server", "locked-26.1.2", "--locked"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+
+    assert!(
+        !output.status.success(),
+        "locked run should fail when no lockfile exists"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("locked run requires modstage.lock"),
+        "locked run should explain the missing lockfile\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr
+    );
+    assert!(
+        !data_home.join("modstage").join("instances").exists(),
+        "locked run without a lockfile must not stage instance state"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
 fn first_child(path: &Path) -> PathBuf {
     fs::read_dir(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
