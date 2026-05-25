@@ -30,6 +30,9 @@ pub(super) fn run_instance(
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
+    if !options.locked && !lock_path.is_file() {
+        resolve_instance(Some(config_path.clone()), Some(selected))?;
+    }
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let game_dir = dirs
         .data

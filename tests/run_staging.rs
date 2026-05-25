@@ -587,6 +587,110 @@ sides = ["server"]
 
 #[test]
 #[cfg(unix)]
+fn run_server_auto_resolves_missing_lockfile_before_launching() {
+    let project = temp_dir("run-auto-resolve-project");
+    let metadata = temp_dir("run-auto-resolve-metadata");
+    let data_home = temp_dir("run-auto-resolve-data");
+    let cache_home = temp_dir("run-auto-resolve-cache");
+    let server = metadata.join("server.jar");
+    let client = metadata.join("client.jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let fake_java = metadata.join("fake-java-auto-resolve");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'auto resolve stdout\\n'\nprintf '%s\\n' \"$@\" > java-args.txt\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-auto-resolve"
+
+[[instance]]
+name = "server-auto-resolve-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let run = run_in_with_string_env(
+        &[
+            "run",
+            "server",
+            "server-auto-resolve-26.1.2",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "run should auto-resolve then launch\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        project.join("modstage.lock").is_file(),
+        "run should create modstage.lock before launching"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("auto resolve stdout"),
+        "run should stream output from the auto-resolved launch"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_client_executes_resolved_minecraft_artifact_with_configured_java() {
     let project = temp_dir("run-client-exec-project");
     let metadata = temp_dir("run-client-exec-metadata");
