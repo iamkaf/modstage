@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const ROOT_HELP: &str = "\
 modstage
@@ -54,9 +55,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         [command, instance] if command == "resolve" => {
             resolve_instance(invocation.config, Some(instance))
         }
-        [command, _side, _instance, ..] if command == "run" => {
-            println!("run is not implemented yet");
-            Ok(())
+        [command, side, instance, rest @ ..] if command == "run" => {
+            run_instance(invocation.config, side, instance, rest)
         }
         [command, subject] if command == "inspect" && subject == "config" => {
             inspect_config(invocation.config)
@@ -318,6 +318,127 @@ sides = [{}]\n",
     println!("resolved {} into {}", instance.name, lock_path.display());
 
     Ok(())
+}
+
+fn run_instance(
+    explicit_config: Option<PathBuf>,
+    side: &str,
+    selected: &str,
+    _args: &[String],
+) -> Result<(), String> {
+    if side != "client" && side != "server" {
+        return Err(format!("unknown side `{side}`"));
+    }
+
+    let config_path = config_path(explicit_config)?;
+    let contents = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let config = Config::parse(&contents)?;
+    let instance = config
+        .instances
+        .iter()
+        .find(|instance| instance.name == selected)
+        .ok_or_else(|| format!("unknown instance `{selected}`"))?;
+
+    if !instance.sides.iter().any(|configured| configured == side) {
+        return Err(format!("instance `{selected}` does not support side `{side}`"));
+    }
+
+    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let dirs = StateDirs::for_project(&config.project_name, root)?;
+    let game_dir = dirs
+        .data
+        .join("instances")
+        .join(&dirs.project_id)
+        .join(&instance.name)
+        .join(side)
+        .join("game");
+    let mods_dir = game_dir.join("mods");
+
+    fs::create_dir_all(&mods_dir)
+        .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
+    reconcile_mods(root, instance, &mods_dir)?;
+
+    if side == "server" {
+        fs::write(game_dir.join("eula.txt"), "eula=true\n")
+            .map_err(|error| format!("failed to write server eula.txt: {error}"))?;
+    }
+
+    let run_dir = dirs
+        .data
+        .join("runs")
+        .join(&dirs.project_id)
+        .join(run_id());
+    fs::create_dir_all(&run_dir)
+        .map_err(|error| format!("failed to create {}: {error}", run_dir.display()))?;
+    fs::write(
+        run_dir.join("run.toml"),
+        format!(
+            "instance = \"{}\"\nside = \"{}\"\nstatus = \"staged\"\ngame_dir = \"{}\"\n",
+            instance.name,
+            side,
+            game_dir.display()
+        ),
+    )
+    .map_err(|error| format!("failed to write run report: {error}"))?;
+
+    Err(format!(
+        "launch is not implemented yet; staged instance at {} and report at {}",
+        game_dir.display(),
+        run_dir.display()
+    ))
+}
+
+fn reconcile_mods(root: &Path, instance: &Instance, mods_dir: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(mods_dir)
+        .map_err(|error| format!("failed to read {}: {error}", mods_dir.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read mod directory entry: {error}"))?
+            .path();
+
+        if path.is_file() {
+            fs::remove_file(&path)
+                .map_err(|error| format!("failed to remove stale mod {}: {error}", path.display()))?;
+        }
+    }
+
+    for source in &instance.mods {
+        let Some(path) = resolved_mod_path(root, source)? else {
+            continue;
+        };
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("resolved mod has no filename: {}", path.display()))?;
+        fs::copy(&path, mods_dir.join(file_name))
+            .map_err(|error| format!("failed to stage mod {}: {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
+    if let Some(path) = local_mod_path(root, source) {
+        return path
+            .canonicalize()
+            .map(Some)
+            .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()));
+    }
+
+    if let Some(coordinates) = MavenCoordinates::parse(source) {
+        return Ok(maven_local_artifact(&coordinates).and_then(|path| path.canonicalize().ok()));
+    }
+
+    Ok(None)
+}
+
+fn run_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    format!("{millis}")
 }
 
 fn config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
