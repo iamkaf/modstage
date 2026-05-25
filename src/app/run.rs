@@ -179,9 +179,20 @@ fn launch_minecraft_instance(
         .clone()
         .unwrap_or_else(|| PathBuf::from(java_bin()));
     let mut command = Command::new(&java);
-    command.arg("-jar").arg(&artifact);
-    if side == "server" {
+    if side == "client"
+        && let Some(main_class) = locked_value(root, "main_class")?
+    {
+        let mut classpath = vec![artifact.clone()];
+        classpath.extend(fetch_locked_libraries(root, &cache_dir.join("libraries"))?);
+        command
+            .arg("-cp")
+            .arg(join_classpath(&classpath))
+            .arg(main_class);
+    } else if side == "server" {
+        command.arg("-jar").arg(&artifact);
         command.arg("nogui");
+    } else {
+        command.arg("-jar").arg(&artifact);
     }
     command.current_dir(game_dir);
     let output = run_process_with_timeout(&mut command, options.timeout_duration()?)
@@ -465,6 +476,10 @@ fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String>
 }
 
 fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String> {
+    locked_value(root, key)
+}
+
+fn locked_value(root: &Path, key: &str) -> Result<Option<String>, String> {
     let lock_path = root.join("modstage.lock");
     if !lock_path.is_file() {
         return Ok(None);
@@ -473,6 +488,38 @@ fn locked_minecraft_url(root: &Path, key: &str) -> Result<Option<String>, String
     let lock = fs::read_to_string(&lock_path)
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
     Ok(block_string_value(&lock, key))
+}
+
+fn fetch_locked_libraries(root: &Path, cache_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let lock_path = root.join("modstage.lock");
+    if !lock_path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    let mut libraries = Vec::new();
+    for block in lock.split("[[library]]").skip(1) {
+        let Some(url) = block_string_value(block, "url") else {
+            continue;
+        };
+        let file_name = block_string_value(block, "path")
+            .and_then(|path| path.rsplit('/').next().map(str::to_string))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "library.jar".to_string());
+        libraries.push(fetch_to_cache(&url, cache_dir, &file_name)?);
+    }
+
+    Ok(libraries)
+}
+
+fn join_classpath(paths: &[PathBuf]) -> String {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
 fn block_string_value(block: &str, key: &str) -> Option<String> {
