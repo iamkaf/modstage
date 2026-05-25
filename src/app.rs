@@ -1,0 +1,9 @@
+include!("app/cli.rs");
+include!("app/commands.rs");
+include!("app/resolve.rs");
+include!("app/run.rs");
+include!("app/metadata.rs");
+include!("app/config.rs");
+include!("app/hash.rs");
+include!("app/java.rs");
+include!("app/state.rs");
