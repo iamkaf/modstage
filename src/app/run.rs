@@ -198,9 +198,7 @@ pub(super) fn launch_minecraft_instance(
         .unwrap_or_else(|| PathBuf::from(java_bin()));
     let mut command = Command::new(&java);
     let mut launch_args = Vec::new();
-    if side == "client"
-        && let Some(main_class) = locked_main_class(root, side)?
-    {
+    if let Some(main_class) = locked_main_class(root, side)? {
         let mut classpath = vec![artifact.clone()];
         classpath.extend(fetch_locked_libraries(root, &cache_dir.join("libraries"))?);
         let classpath = join_classpath(&classpath);
@@ -211,12 +209,14 @@ pub(super) fn launch_minecraft_instance(
         launch_args.push("-cp".to_string());
         launch_args.push(classpath);
         launch_args.push(main_class);
-        if let Some(asset_index) = locked_value(root, "id")? {
+        if side == "client"
+            && let Some(asset_index) = locked_value(root, "id")?
+        {
             command.arg("--assetIndex").arg(&asset_index);
             launch_args.push("--assetIndex".to_string());
             launch_args.push(asset_index);
         }
-        if locked_value(root, "index_url")?.is_some() {
+        if side == "client" && locked_value(root, "index_url")?.is_some() {
             let assets_dir = cache_dir.join("assets").join("objects");
             command
                 .arg("--assetsDir")

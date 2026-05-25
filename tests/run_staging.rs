@@ -1622,6 +1622,160 @@ sides = ["client"]
 
 #[test]
 #[cfg(unix)]
+fn run_neoforge_server_uses_loader_main_class_and_libraries() {
+    let project = temp_dir("run-neoforge-server-project");
+    let metadata = temp_dir("run-neoforge-server-metadata");
+    let data_home = temp_dir("run-neoforge-server-data");
+    let cache_home = temp_dir("run-neoforge-server-cache");
+    let repo = metadata.join("repo");
+    let installer_dir = repo
+        .join("net")
+        .join("neoforged")
+        .join("neoforge")
+        .join("4.0.0");
+    fs::create_dir_all(&installer_dir).expect("failed to create NeoForge artifact dir");
+    fs::write(installer_dir.join("neoforge-4.0.0.jar"), b"installer")
+        .expect("failed to write NeoForge installer jar");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    let neoforge_metadata = metadata.join("neoforge-loader.json");
+    fs::write(
+        &neoforge_metadata,
+        r#"{
+  "version": "4.0.0",
+  "installer_maven": "net.neoforged:neoforge:4.0.0",
+  "client_main_class": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+  "server_main_class": "cpw.mods.bootstraplauncher.BootstrapLauncher"
+}"#,
+    )
+    .expect("failed to write NeoForge metadata");
+    let fake_java = metadata.join("fake-java-neoforge-server");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > java-args.txt\nprintf 'neoforge server stdout\\n'\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        format!(
+            r#"[project]
+name = "run-neoforge-server"
+
+[repositories]
+neoforge = "file://{}"
+
+[[instance]]
+name = "neoforge-server-26.1.2"
+minecraft = "26.1.2"
+loader = "neoforge"
+loader_version = "latest"
+sides = ["server"]
+"#,
+            repo.display()
+        ),
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let neoforge_url = format!("file://{}", neoforge_metadata.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "neoforge-server-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("MODSTAGE_NEOFORGE_META_URL", &neoforge_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_env(
+        &[
+            "run",
+            "server",
+            "neoforge-server-26.1.2",
+            "--locked",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        run.status.success(),
+        "run should execute the configured Java command\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let game_dir = first_child(&state_root)
+        .join("neoforge-server-26.1.2")
+        .join("server")
+        .join("game");
+    let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
+        .expect("fake java should record its launch args");
+    assert!(
+        java_args.contains("-cp")
+            && java_args.contains("server.jar")
+            && java_args.contains("neoforge-4.0.0.jar")
+            && java_args.contains("cpw.mods.bootstraplauncher.BootstrapLauncher")
+            && !java_args.contains("-jar"),
+        "NeoForge server launch should use the loader main class and loader libraries\n{java_args}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_server_enforces_timeout_and_records_it() {
     let project = temp_dir("run-timeout-project");
     let metadata = temp_dir("run-timeout-metadata");
