@@ -112,6 +112,67 @@ fn inspect_lock_prints_the_generated_lockfile_for_an_instance() {
 }
 
 #[test]
+fn resolve_rejects_unsupported_loaders_and_sides_in_launcher_language() {
+    let project = temp_project("resolve-invalid-config");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-invalid"
+
+[[instance]]
+name = "bad-loader"
+minecraft = "26.1.2"
+loader = "quilt"
+sides = ["client"]
+"#,
+    )
+    .expect("failed to write invalid config");
+
+    let bad_loader = run_in(&["resolve", "bad-loader"], &project);
+    assert!(
+        !bad_loader.status.success(),
+        "resolve should reject unsupported loader"
+    );
+    let stderr = String::from_utf8_lossy(&bad_loader.stderr);
+    assert!(
+        stderr.contains("instance `bad-loader` uses unsupported loader `quilt`")
+            && stderr.contains("vanilla, fabric, forge, neoforge"),
+        "unsupported loader error should use launcher language\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bad_loader.stdout),
+        stderr
+    );
+
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-invalid"
+
+[[instance]]
+name = "bad-side"
+minecraft = "26.1.2"
+loader = "fabric"
+sides = ["data"]
+"#,
+    )
+    .expect("failed to write invalid side config");
+    let bad_side = run_in(&["resolve", "bad-side"], &project);
+    assert!(
+        !bad_side.status.success(),
+        "resolve should reject unsupported side"
+    );
+    let stderr = String::from_utf8_lossy(&bad_side.stderr);
+    assert!(
+        stderr.contains("instance `bad-side` uses unsupported side `data`")
+            && stderr.contains("client, server"),
+        "unsupported side error should use launcher language\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bad_side.stdout),
+        stderr
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
+
+#[test]
 fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
     let project = temp_project("resolve-mods");
     fs::write(

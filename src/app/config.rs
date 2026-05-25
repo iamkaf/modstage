@@ -168,8 +168,22 @@ impl Config {
             if instance.loader.is_empty() {
                 return Err(format!("instance `{}` is missing loader", instance.name));
             }
+            if !is_supported_loader(&instance.loader) {
+                return Err(format!(
+                    "instance `{}` uses unsupported loader `{}`; supported loaders: vanilla, fabric, forge, neoforge",
+                    instance.name, instance.loader
+                ));
+            }
             if instance.sides.is_empty() {
                 return Err(format!("instance `{}` is missing sides", instance.name));
+            }
+            for side in &instance.sides {
+                if !is_supported_side(side) {
+                    return Err(format!(
+                        "instance `{}` uses unsupported side `{side}`; supported sides: client, server",
+                        instance.name
+                    ));
+                }
             }
             for fixture in &instance.fixtures {
                 if fixture.from.is_empty() {
@@ -187,6 +201,14 @@ impl Config {
             instances,
         })
     }
+}
+
+pub(super) fn is_supported_loader(loader: &str) -> bool {
+    matches!(loader, "vanilla" | "fabric" | "forge" | "neoforge")
+}
+
+pub(super) fn is_supported_side(side: &str) -> bool {
+    matches!(side, "client" | "server")
 }
 
 pub(super) fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
