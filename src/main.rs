@@ -567,7 +567,39 @@ fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, Strin
             .and_then(|path| path.canonicalize().ok()));
     }
 
+    if let Some(path) = locked_mod_path(root, source)? {
+        return path
+            .canonicalize()
+            .map(Some)
+            .map_err(|error| format!("failed to resolve locked mod {}: {error}", path.display()));
+    }
+
     Ok(None)
+}
+
+fn locked_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, String> {
+    let lock_path = root.join("modstage.lock");
+    if !lock_path.is_file() {
+        return Ok(None);
+    }
+
+    let lock = fs::read_to_string(&lock_path)
+        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+    for block in lock.split("[[mod]]").skip(1) {
+        if block_string_value(block, "source").as_deref() == Some(source)
+            && let Some(path) = block_string_value(block, "path")
+        {
+            return Ok(Some(PathBuf::from(path)));
+        }
+    }
+
+    Ok(None)
+}
+
+fn block_string_value(block: &str, key: &str) -> Option<String> {
+    block.lines()
+        .map(str::trim)
+        .find_map(|line| string_value(line, key))
 }
 
 fn run_id() -> String {

@@ -20,6 +20,19 @@ fn run_in_with_env(args: &[&str], cwd: &Path, envs: &[(&str, &Path)]) -> Output 
         .unwrap_or_else(|error| panic!("failed to run modstage {args:?}: {error}"))
 }
 
+fn run_in_with_string_env(args: &[&str], cwd: &Path, envs: &[(&str, &str)]) -> Output {
+    let mut command = modstage();
+    command.args(args).current_dir(cwd);
+
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run modstage {args:?}: {error}"))
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -144,6 +157,106 @@ mods = [
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+fn run_stages_modrinth_mods_from_the_resolved_lockfile() {
+    let project = temp_dir("run-stage-modrinth-project");
+    let metadata = temp_dir("run-stage-modrinth-metadata");
+    let data_home = temp_dir("run-stage-modrinth-data");
+    let cache_home = temp_dir("run-stage-modrinth-cache");
+    let jar = metadata.join("sample-mod-1.0.0.jar");
+    fs::write(&jar, b"abc").expect("failed to write Modrinth jar");
+    let versions = metadata.join("sample-mod-versions.json");
+    fs::write(
+        &versions,
+        format!(
+            r#"[{{
+  "id": "sample-version",
+  "project_id": "sample-project",
+  "version_number": "1.0.0",
+  "game_versions": ["26.1.2"],
+  "loaders": ["fabric"],
+  "files": [{{
+    "primary": true,
+    "filename": "sample-mod-1.0.0.jar",
+    "url": "file://{}",
+    "hashes": {{
+      "sha512": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+      "sha1": "a9993e364706816aba3e25717850c26c9cd0d89d"
+    }}
+  }}]
+}}]"#,
+            jar.display()
+        ),
+    )
+    .expect("failed to write Modrinth versions metadata");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-stage-modrinth"
+
+[[instance]]
+name = "server-modrinth-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["server"]
+mods = [
+  "modrinth:sample-mod",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let versions_url = format!("file://{}", versions.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-modrinth-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let run = run_in_with_env(
+        &["run", "server", "server-modrinth-26.1.2"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        !run.status.success(),
+        "run should fail clearly until Minecraft launch is implemented"
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let instance_dir = first_child(&state_root)
+        .join("server-modrinth-26.1.2")
+        .join("server")
+        .join("game");
+    let staged = instance_dir.join("mods").join("sample-mod-1.0.0.jar");
+    assert!(
+        staged.is_file(),
+        "run should stage the lockfile-resolved Modrinth jar into the instance mods directory"
+    );
+    assert_eq!(
+        fs::read(&staged).expect("staged Modrinth jar should be readable"),
+        b"abc"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
