@@ -265,6 +265,88 @@ mods = [
 }
 
 #[test]
+fn run_stages_maven_file_repository_mods_from_the_resolved_lockfile() {
+    let project = temp_dir("run-stage-maven-project");
+    let data_home = temp_dir("run-stage-maven-data");
+    let cache_home = temp_dir("run-stage-maven-cache");
+    let repo = project.join("repo");
+    let artifact_dir = repo
+        .join("com")
+        .join("example")
+        .join("example-mod")
+        .join("1.0.0");
+    fs::create_dir_all(&artifact_dir).expect("failed to create Maven artifact dir");
+    fs::write(artifact_dir.join("example-mod-1.0.0.jar"), b"abc")
+        .expect("failed to write Maven jar");
+    fs::write(
+        project.join("modstage.toml"),
+        format!(
+            r#"[project]
+name = "run-stage-maven"
+
+[repositories]
+local = "file://{}"
+
+[[instance]]
+name = "server-maven-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "latest"
+sides = ["server"]
+mods = [
+  "maven:com.example:example-mod:1.0.0",
+]
+"#,
+            repo.display()
+        ),
+    )
+    .expect("failed to write config");
+
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-maven-26.1.2"],
+        &project,
+        &[("XDG_DATA_HOME", data_home_str), ("XDG_CACHE_HOME", cache_home_str)],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let run = run_in_with_env(
+        &["run", "server", "server-maven-26.1.2"],
+        &project,
+        &[("XDG_DATA_HOME", &data_home), ("XDG_CACHE_HOME", &cache_home)],
+    );
+    assert!(
+        !run.status.success(),
+        "run should fail clearly until this fixture has a launch graph"
+    );
+
+    let state_root = data_home.join("modstage").join("instances");
+    let instance_dir = first_child(&state_root)
+        .join("server-maven-26.1.2")
+        .join("server")
+        .join("game");
+    let staged = instance_dir.join("mods").join("example-mod-1.0.0.jar");
+    assert!(
+        staged.is_file(),
+        "run should stage the lockfile-resolved Maven jar into the instance mods directory"
+    );
+    assert_eq!(
+        fs::read(&staged).expect("staged Maven jar should be readable"),
+        b"abc"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
 fn run_locked_requires_an_existing_lockfile_before_staging() {
     let project = temp_dir("run-locked-project");
     let data_home = temp_dir("run-locked-data");

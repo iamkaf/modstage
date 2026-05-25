@@ -440,17 +440,17 @@ fn resolved_mod_path(root: &Path, source: &str) -> Result<Option<PathBuf>, Strin
             .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()));
     }
 
-    if let Some(coordinates) = MavenCoordinates::parse(source) {
-        return Ok(maven_artifact(&[], &coordinates)
-            .map(|(_, path)| path)
-            .and_then(|path| path.canonicalize().ok()));
-    }
-
     if let Some(path) = locked_mod_path(root, source)? {
         return path
             .canonicalize()
             .map(Some)
             .map_err(|error| format!("failed to resolve locked mod {}: {error}", path.display()));
+    }
+
+    if let Some(coordinates) = MavenCoordinates::parse(source) {
+        return Ok(maven_artifact(&[], &coordinates)
+            .map(|(_, path)| path)
+            .and_then(|path| path.canonicalize().ok()));
     }
 
     Ok(None)
