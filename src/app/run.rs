@@ -32,6 +32,11 @@ pub(super) fn run_instance(
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
+    if options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
+        return Err(format!(
+            "locked run requires modstage.lock for instance `{selected}`; run `modstage resolve {selected}` first"
+        ));
+    }
     if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
         resolve_instance(Some(config_path.clone()), Some(selected))?;
     }
