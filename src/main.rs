@@ -352,13 +352,17 @@ sides = [{}]\n",
     let metadata = resolve_minecraft_metadata(&config, instance, config_root)?;
     let lock = if let Some(metadata) = metadata {
         format!(
-            "{lock}\n[minecraft]\nversion = \"{}\"\nmanifest_url = \"{}\"\nmanifest_sha256 = \"{}\"\nversion_url = \"{}\"\nversion_sha256 = \"{}\"\njava_major = {}\n",
+            "{lock}\n[minecraft]\nversion = \"{}\"\nmanifest_url = \"{}\"\nmanifest_sha256 = \"{}\"\nversion_url = \"{}\"\nversion_sha256 = \"{}\"\njava_major = {}\nclient_url = \"{}\"\nclient_sha256 = \"{}\"\nserver_url = \"{}\"\nserver_sha256 = \"{}\"\n",
             instance.minecraft,
             metadata.manifest_url,
             metadata.manifest_sha256,
             metadata.version_url,
             metadata.version_sha256,
-            metadata.java_major
+            metadata.java_major,
+            metadata.client_url,
+            metadata.client_sha256,
+            metadata.server_url,
+            metadata.server_sha256
         )
     } else {
         lock
@@ -552,6 +556,10 @@ struct MinecraftMetadata {
     version_url: String,
     version_sha256: String,
     java_major: u32,
+    client_url: String,
+    client_sha256: String,
+    server_url: String,
+    server_sha256: String,
 }
 
 fn resolve_minecraft_metadata(
@@ -575,6 +583,16 @@ fn resolve_minecraft_metadata(
         .map_err(|error| format!("failed to read {}: {error}", version_path.display()))?;
     let version_text = String::from_utf8_lossy(&version);
     let java_major = json_u32(&version_text, "majorVersion").unwrap_or(8);
+    let client_url = json_object_string(&version_text, "client", "url")
+        .ok_or_else(|| format!("Minecraft version `{}` has no client download URL", instance.minecraft))?;
+    let server_url = json_object_string(&version_text, "server", "url")
+        .ok_or_else(|| format!("Minecraft version `{}` has no server download URL", instance.minecraft))?;
+    let client_path = fetch_to_cache(&client_url, &cache_dir, &format!("{}-client.jar", instance.minecraft))?;
+    let server_path = fetch_to_cache(&server_url, &cache_dir, &format!("{}-server.jar", instance.minecraft))?;
+    let client = fs::read(&client_path)
+        .map_err(|error| format!("failed to read {}: {error}", client_path.display()))?;
+    let server = fs::read(&server_path)
+        .map_err(|error| format!("failed to read {}: {error}", server_path.display()))?;
 
     Ok(Some(MinecraftMetadata {
         manifest_url,
@@ -582,6 +600,10 @@ fn resolve_minecraft_metadata(
         version_url,
         version_sha256: sha256_hex(&version),
         java_major,
+        client_url,
+        client_sha256: sha256_hex(&client),
+        server_url,
+        server_sha256: sha256_hex(&server),
     }))
 }
 
@@ -634,6 +656,11 @@ fn json_string(text: &str, key: &str) -> Option<String> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+fn json_object_string(text: &str, object_key: &str, value_key: &str) -> Option<String> {
+    let object_start = text.find(&format!("\"{object_key}\""))?;
+    json_string(&text[object_start..], value_key)
 }
 
 fn json_u32(text: &str, key: &str) -> Option<u32> {

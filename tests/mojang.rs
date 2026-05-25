@@ -40,9 +40,27 @@ fn resolve_fetches_and_records_mojang_version_metadata() {
     let metadata = temp_dir("mojang-metadata");
     let data_home = temp_dir("mojang-data");
     let cache_home = temp_dir("mojang-cache");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
     let version_json = metadata.join("26.1.2.json");
-    fs::write(&version_json, r#"{"id":"26.1.2","javaVersion":{"majorVersion":25}}"#)
-        .expect("failed to write version json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
     let manifest = metadata.join("version_manifest.json");
     fs::write(
         &manifest,
@@ -95,6 +113,10 @@ sides = ["client", "server"]
         "manifest_sha256 = ",
         "version_sha256 = ",
         r#"java_major = 25"#,
+        &format!(r#"client_url = "file://{}""#, client.display()),
+        r#"client_sha256 = "948fe603f61dc036b5c596dc09fe3ce3f3d30dc90f024c85f3c82db2ccab679d""#,
+        &format!(r#"server_url = "file://{}""#, server.display()),
+        r#"server_sha256 = "b3eacd33433b31b5252351032c9b3e7a2e7aa7738d5decdf0dd6c62680853c06""#,
     ] {
         assert!(
             lock.contains(expected),
