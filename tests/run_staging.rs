@@ -1,6 +1,9 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -45,6 +48,48 @@ fn temp_dir(name: &str) -> PathBuf {
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
+}
+
+fn spawn_http_file(path: &'static str, body: &'static [u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test HTTP server");
+    let address = listener
+        .local_addr()
+        .expect("failed to read test HTTP server address");
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            let mut request = [0_u8; 1024];
+            let Ok(count) = stream.read(&mut request) else {
+                continue;
+            };
+            let request = String::from_utf8_lossy(&request[..count]);
+            let request_path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
+            if request_path == path {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            } else {
+                let body = b"not found";
+                let header = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        }
+    });
+
+    format!("http://{address}")
 }
 
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
@@ -536,13 +581,14 @@ fn locked_run_restores_remote_maven_mods_after_cache_deletion() {
     let metadata = temp_dir("run-remote-maven-metadata");
     let data_home = temp_dir("run-remote-maven-data");
     let cache_home = temp_dir("run-remote-maven-cache");
-    let fake_bin = temp_dir("run-remote-maven-bin");
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
-    let remote_mod = metadata.join("remote-mod-1.0.0.jar");
+    let remote_maven = spawn_http_file(
+        "/com/example/remote-mod/1.0.0/remote-mod-1.0.0.jar",
+        b"remote mod",
+    );
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
-    fs::write(&remote_mod, b"remote mod").expect("failed to write remote Maven mod jar");
     let version_json = metadata.join("26.1.2.json");
     fs::write(
         &version_json,
@@ -569,21 +615,6 @@ fn locked_run_restores_remote_maven_mods_after_cache_deletion() {
         ),
     )
     .expect("failed to write manifest");
-    let curl = fake_bin.join("curl");
-    fs::write(
-        &curl,
-        format!(
-            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://repo.maven.apache.org/maven2/com/example/remote-mod/1.0.0/remote-mod-1.0.0.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
-            metadata.display(),
-            remote_mod.display()
-        ),
-    )
-    .expect("failed to write fake curl");
-    let mut permissions = fs::metadata(&curl)
-        .expect("fake curl metadata should exist")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
     let fake_java = metadata.join("fake-java-remote-maven");
     fs::write(
         &fake_java,
@@ -597,8 +628,12 @@ fn locked_run_restores_remote_maven_mods_after_cache_deletion() {
     fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
     fs::write(
         project.join("modstage.toml"),
-        r#"[project]
+        format!(
+            r#"[project]
 name = "run-remote-maven"
+
+[repositories]
+central = "{}"
 
 [[instance]]
 name = "remote-maven-26.1.2"
@@ -609,22 +644,18 @@ mods = [
   "maven:com.example:remote-mod:1.0.0",
 ]
 "#,
+            remote_maven
+        ),
     )
     .expect("failed to write config");
 
     let manifest_url = format!("file://{}", manifest.display());
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
         &["resolve", "remote-maven-26.1.2"],
         &project,
         &[
-            ("PATH", &path),
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             ("XDG_DATA_HOME", data_home_str),
             ("XDG_CACHE_HOME", cache_home_str),
@@ -653,7 +684,6 @@ mods = [
         ],
         &project,
         &[
-            ("PATH", &path),
             ("XDG_DATA_HOME", data_home_str),
             ("XDG_CACHE_HOME", cache_home_str),
         ],
@@ -684,7 +714,6 @@ mods = [
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
 }
 
 #[test]

@@ -3,9 +3,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -225,12 +222,22 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
     let metadata = temp_dir("forge-pinned-metadata");
     let data_home = temp_dir("forge-pinned-data");
     let cache_home = temp_dir("forge-pinned-cache");
-    let fake_bin = temp_dir("forge-pinned-bin");
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
-    let installer = metadata.join("forge-26.1.2-64.0.4.jar");
+    let installer = metadata
+        .join("net")
+        .join("minecraftforge")
+        .join("forge")
+        .join("26.1.2-64.0.4")
+        .join("forge-26.1.2-64.0.4-installer.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
+    fs::create_dir_all(
+        installer
+            .parent()
+            .expect("installer jar should have parent"),
+    )
+    .expect("failed to create Forge maven dir");
     write_stored_jar(&installer, &[]);
     let version_json = metadata.join("26.1.2.json");
     fs::write(
@@ -258,25 +265,14 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
         ),
     )
     .expect("failed to write manifest");
-    let curl = fake_bin.join("curl");
-    fs::write(
-        &curl,
-        format!(
-            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
-            metadata.display(),
-            installer.display()
-        ),
-    )
-    .expect("failed to write fake curl");
-    let mut permissions = fs::metadata(&curl)
-        .expect("fake curl metadata should exist")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
     fs::write(
         project.join("modstage.toml"),
-        r#"[project]
+        format!(
+            r#"[project]
 name = "forge-pinned-test"
+
+[repositories]
+forge = "file://{}"
 
 [[instance]]
 name = "forge-pinned-26.1.2"
@@ -285,20 +281,16 @@ loader = "forge"
 loader_version = "26.1.2-64.0.4"
 sides = ["client", "server"]
 "#,
+            metadata.display()
+        ),
     )
     .expect("failed to write config");
 
     let manifest_url = format!("file://{}", manifest.display());
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
     let output = run_in_with_env(
         &["resolve", "forge-pinned-26.1.2"],
         &project,
         &[
-            ("PATH", &path),
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             (
                 "XDG_DATA_HOME",
@@ -316,13 +308,6 @@ sides = ["client", "server"]
         "resolve should use pinned Forge metadata and built-in Maven\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-
-    let urls = fs::read_to_string(metadata.join("curl-urls.txt"))
-        .expect("fake curl should record fetched URLs");
-    assert!(
-        urls.contains("https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar"),
-        "resolve should fetch the pinned Forge installer classifier from built-in Maven\n{urls}"
     );
 
     let lock =
@@ -348,7 +333,6 @@ sides = ["client", "server"]
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
 }
 
 #[test]
@@ -358,21 +342,29 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
     let metadata = temp_dir("forge-profile-metadata");
     let data_home = temp_dir("forge-profile-data");
     let cache_home = temp_dir("forge-profile-cache");
-    let fake_bin = temp_dir("forge-profile-bin");
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
-    let installer = metadata.join("forge-26.1.2-64.0.4-installer.jar");
+    let installer = metadata
+        .join("net")
+        .join("minecraftforge")
+        .join("forge")
+        .join("26.1.2-64.0.4")
+        .join("forge-26.1.2-64.0.4-installer.jar");
     let bootstrap = metadata.join("bootstraplauncher-2.0.0.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
+    fs::create_dir_all(
+        installer
+            .parent()
+            .expect("installer jar should have parent"),
+    )
+    .expect("failed to create Forge maven dir");
     fs::write(&bootstrap, b"bootstraplauncher").expect("failed to write bootstrap launcher jar");
-    write_stored_jar(
-        &installer,
-        &[(
-            "version.json",
-            br#"{
+    let bootstrap_url = format!("file://{}", bootstrap.display());
+    let installer_version_json = format!(
+        r#"{{
   "mainClass": "net.minecraftforge.bootstrap.ForgeBootstrap",
-  "arguments": {
+  "arguments": {{
     "game": [
       "--launchTarget",
       "forge_client"
@@ -380,29 +372,32 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
     "jvm": [
       "-Dforge.test=true"
     ]
-  },
+  }},
   "libraries": [
-    {
+    {{
       "name": "cpw.mods:bootstraplauncher:2.0.0",
-      "downloads": {
-        "artifact": {
+      "downloads": {{
+        "artifact": {{
           "path": "cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar",
-          "url": "https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar"
-        }
-      }
-    },
-    {
+          "url": "{bootstrap_url}"
+        }}
+      }}
+    }},
+    {{
       "name": "net.minecraftforge:forge:26.1.2-64.0.4:client",
-      "downloads": {
-        "artifact": {
+      "downloads": {{
+        "artifact": {{
           "path": "net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-client.jar",
           "url": ""
-        }
-      }
-    }
+        }}
+      }}
+    }}
   ]
-}"#,
-        )],
+}}"#
+    );
+    write_stored_jar(
+        &installer,
+        &[("version.json", installer_version_json.as_bytes())],
     );
     let version_json = metadata.join("26.1.2.json");
     fs::write(
@@ -430,26 +425,14 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
         ),
     )
     .expect("failed to write manifest");
-    let curl = fake_bin.join("curl");
-    fs::write(
-        &curl,
-        format!(
-            "#!/bin/sh\nout=''\nurl=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then\n    shift\n    out=\"$1\"\n  else\n    url=\"$1\"\n  fi\n  shift\ndone\nprintf '%s\\n' \"$url\" >> {}/curl-urls.txt\ncase \"$url\" in\n  https://maven.minecraftforge.net/net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-installer.jar) cp {} \"$out\" ;;\n  https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar) cp {} \"$out\" ;;\n  *) exit 64 ;;\nesac\n",
-            metadata.display(),
-            installer.display(),
-            bootstrap.display()
-        ),
-    )
-    .expect("failed to write fake curl");
-    let mut permissions = fs::metadata(&curl)
-        .expect("fake curl metadata should exist")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&curl, permissions).expect("failed to chmod fake curl");
     fs::write(
         project.join("modstage.toml"),
-        r#"[project]
+        format!(
+            r#"[project]
 name = "forge-profile-test"
+
+[repositories]
+forge = "file://{}"
 
 [[instance]]
 name = "forge-profile-26.1.2"
@@ -458,20 +441,16 @@ loader = "forge"
 loader_version = "26.1.2-64.0.4"
 sides = ["client", "server"]
 "#,
+            metadata.display()
+        ),
     )
     .expect("failed to write config");
 
     let manifest_url = format!("file://{}", manifest.display());
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
     let output = run_in_with_env(
         &["resolve", "forge-profile-26.1.2"],
         &project,
         &[
-            ("PATH", &path),
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             (
                 "XDG_DATA_HOME",
@@ -502,7 +481,7 @@ sides = ["client", "server"]
         r#"arg = "--launchTarget""#,
         r#"arg = "forge_client""#,
         r#"name = "cpw.mods:bootstraplauncher:2.0.0""#,
-        r#"url = "https://repo.example/cpw/mods/bootstraplauncher/2.0.0/bootstraplauncher-2.0.0.jar""#,
+        &format!(r#"url = "{bootstrap_url}""#),
         r#"sha256 = "603eb608091a4fb09e0c529d8eaa13fcc9c12b21dc8abd170f7f030217c7c729""#,
     ] {
         assert!(
@@ -523,5 +502,4 @@ sides = ["client", "server"]
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-    fs::remove_dir_all(fake_bin).expect("failed to remove fake bin");
 }

@@ -1,6 +1,9 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -32,6 +35,72 @@ fn temp_dir(name: &str) -> PathBuf {
 
     fs::create_dir_all(&root).expect("failed to create temp dir");
     root
+}
+
+fn spawn_mojang_http_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test HTTP server");
+    let address = listener
+        .local_addr()
+        .expect("failed to read test HTTP server address");
+    let base = format!("http://{address}");
+    let server_base = base.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            let mut request = [0_u8; 1024];
+            let Ok(count) = stream.read(&mut request) else {
+                continue;
+            };
+            let request = String::from_utf8_lossy(&request[..count]);
+            let path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
+            let body = match path {
+                "/version_manifest.json" => Some(format!(
+                    r#"{{"versions":[{{"id":"26.1.2","url":"{server_base}/version.json"}}]}}"#
+                )),
+                "/version.json" => Some(format!(
+                    r#"{{
+  "id": "26.1.2",
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "{server_base}/client.jar" }},
+    "server": {{ "url": "{server_base}/server.jar" }}
+  }}
+}}"#
+                )),
+                "/client.jar" => Some("client".to_string()),
+                "/server.jar" => Some("server".to_string()),
+                _ => None,
+            };
+            match body {
+                Some(body) => {
+                    let body = body.as_bytes();
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+                None => {
+                    let body = b"not found";
+                    let header = format!(
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+            }
+        }
+    });
+
+    base
 }
 
 #[test]
@@ -134,6 +203,58 @@ sides = ["client", "server"]
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+fn resolve_uses_internal_http_downloader_without_curl() {
+    let project = temp_dir("mojang-http-project");
+    let data_home = temp_dir("mojang-http-data");
+    let cache_home = temp_dir("mojang-http-cache");
+    let empty_path = temp_dir("mojang-empty-path");
+    let base = spawn_mojang_http_server();
+    let manifest = format!("{base}/version_manifest.json");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "mojang-http"
+
+[[instance]]
+name = "vanilla-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in_with_env(
+        &["resolve", "vanilla-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest),
+            ("PATH", empty_path.to_str().expect("path is not UTF-8")),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should use the internal HTTP client instead of curl\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+    fs::remove_dir_all(empty_path).expect("failed to remove empty PATH");
 }
 
 #[test]
