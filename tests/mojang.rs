@@ -234,3 +234,122 @@ sides = ["client", "server"]
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
+
+#[test]
+fn resolve_fetches_and_records_mojang_assets() {
+    let project = temp_dir("mojang-assets-project");
+    let metadata = temp_dir("mojang-assets-metadata");
+    let data_home = temp_dir("mojang-assets-data");
+    let cache_home = temp_dir("mojang-assets-cache");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    let asset = metadata.join("asset.ogg");
+    fs::write(&client, b"client").expect("failed to write client jar");
+    fs::write(&server, b"server").expect("failed to write server jar");
+    fs::write(&asset, b"asset").expect("failed to write asset object");
+    let asset_hash = "07073e89283a7b4c254e22b82c08a83738c6a1f0";
+    let assets_json = metadata.join("assets-26.json");
+    fs::write(
+        &assets_json,
+        format!(
+            r#"{{
+  "objects": {{
+    "minecraft/sounds/example.ogg": {{
+      "hash": "{asset_hash}",
+      "size": 5,
+      "url": "file://{}"
+    }}
+  }}
+}}"#,
+            asset.display()
+        ),
+    )
+    .expect("failed to write asset index json");
+    let version_json = metadata.join("26.1.2.json");
+    fs::write(
+        &version_json,
+        format!(
+            r#"{{
+  "id": "26.1.2",
+  "assetIndex": {{
+    "id": "26",
+    "url": "file://{}"
+  }},
+  "javaVersion": {{ "majorVersion": 25 }},
+  "downloads": {{
+    "client": {{ "url": "file://{}" }},
+    "server": {{ "url": "file://{}" }}
+  }}
+}}"#,
+            assets_json.display(),
+            client.display(),
+            server.display()
+        ),
+    )
+    .expect("failed to write version json");
+    let manifest = metadata.join("version_manifest.json");
+    fs::write(
+        &manifest,
+        format!(
+            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
+            version_json.display()
+        ),
+    )
+    .expect("failed to write manifest");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "mojang-assets-test"
+
+[[instance]]
+name = "vanilla-assets-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let output = run_in_with_env(
+        &["resolve", "vanilla-assets-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home.to_str().expect("data path is not UTF-8")),
+            ("XDG_CACHE_HOME", cache_home.to_str().expect("cache path is not UTF-8")),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = fs::read_to_string(project.join("modstage.lock"))
+        .expect("modstage.lock should exist");
+
+    for expected in [
+        "[assets]",
+        r#"id = "26""#,
+        &format!(r#"index_url = "file://{}""#, assets_json.display()),
+        "[[asset]]",
+        r#"name = "minecraft/sounds/example.ogg""#,
+        &format!(r#"hash = "{asset_hash}""#),
+        r#"size = 5"#,
+        &format!(r#"url = "file://{}""#, asset.display()),
+        r#"sha256 = "d59386e0ae435e292fbe0ebcdb954b75ed5fb3922091277cb19f798fc5d50718""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}

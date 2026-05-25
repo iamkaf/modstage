@@ -78,6 +78,18 @@ sides = [{}]\n",
                 library.name, library.path, library.url, library.sha256
             ));
         }
+        if let Some(assets) = metadata.assets {
+            lock.push_str(&format!(
+                "\n[assets]\nid = \"{}\"\nindex_url = \"{}\"\nindex_sha256 = \"{}\"\n",
+                assets.id, assets.index_url, assets.index_sha256
+            ));
+            for asset in assets.objects {
+                lock.push_str(&format!(
+                    "\n[[asset]]\nname = \"{}\"\nhash = \"{}\"\nsize = {}\nurl = \"{}\"\nsha256 = \"{}\"\n",
+                    asset.name, asset.hash, asset.size, asset.url, asset.sha256
+                ));
+            }
+        }
         lock
     } else {
         lock

@@ -10,11 +10,27 @@ struct MinecraftMetadata {
     server_url: String,
     server_sha256: String,
     libraries: Vec<MinecraftLibrary>,
+    assets: Option<MinecraftAssets>,
 }
 
 struct MinecraftLibrary {
     name: String,
     path: String,
+    url: String,
+    sha256: String,
+}
+
+struct MinecraftAssets {
+    id: String,
+    index_url: String,
+    index_sha256: String,
+    objects: Vec<MinecraftAsset>,
+}
+
+struct MinecraftAsset {
+    name: String,
+    hash: String,
+    size: u32,
     url: String,
     sha256: String,
 }
@@ -241,6 +257,7 @@ fn resolve_minecraft_metadata(
     let server = fs::read(&server_path)
         .map_err(|error| format!("failed to read {}: {error}", server_path.display()))?;
     let libraries = resolve_minecraft_libraries(&version_text, &cache_dir)?;
+    let assets = resolve_minecraft_assets(&version_text, &cache_dir)?;
 
     Ok(Some(MinecraftMetadata {
         manifest_url,
@@ -254,7 +271,89 @@ fn resolve_minecraft_metadata(
         server_url,
         server_sha256: sha256_hex(&server),
         libraries,
+        assets,
     }))
+}
+
+fn resolve_minecraft_assets(version_text: &str, cache_dir: &Path) -> Result<Option<MinecraftAssets>, String> {
+    let Some(asset_index) = json_object_after(version_text, "assetIndex") else {
+        return Ok(None);
+    };
+    let Some(id) = json_string(asset_index, "id") else {
+        return Ok(None);
+    };
+    let Some(index_url) = json_string(asset_index, "url") else {
+        return Ok(None);
+    };
+
+    let index_path = fetch_to_cache(&index_url, &cache_dir.join("assets").join("indexes"), &format!("{id}.json"))?;
+    let index = fs::read(&index_path)
+        .map_err(|error| format!("failed to read {}: {error}", index_path.display()))?;
+    let index_text = String::from_utf8_lossy(&index);
+    let mut objects = Vec::new();
+
+    for block in minecraft_asset_blocks(&index_text) {
+        let Some(name) = asset_name(block) else {
+            continue;
+        };
+        let Some(hash) = json_string(block, "hash") else {
+            continue;
+        };
+        let size = json_u32(block, "size").unwrap_or(0);
+        let Some(url) = json_string(block, "url") else {
+            continue;
+        };
+        let object_path = fetch_to_cache(&url, &cache_dir.join("assets").join("objects"), &hash)?;
+        let bytes = fs::read(&object_path)
+            .map_err(|error| format!("failed to read {}: {error}", object_path.display()))?;
+
+        objects.push(MinecraftAsset {
+            name,
+            hash,
+            size,
+            url,
+            sha256: sha256_hex(&bytes),
+        });
+    }
+
+    Ok(Some(MinecraftAssets {
+        id,
+        index_url,
+        index_sha256: sha256_hex(&index),
+        objects,
+    }))
+}
+
+fn minecraft_asset_blocks(index_text: &str) -> Vec<&str> {
+    let Some(objects_start) = index_text.find("\"objects\"") else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    let mut rest = &index_text[objects_start..];
+
+    while let Some(hash_position) = rest.find("\"hash\"") {
+        let before_hash = &rest[..hash_position];
+        let Some(object_start) = before_hash.rfind('{') else {
+            break;
+        };
+        let Some(name_end) = before_hash[..object_start].rfind('"') else {
+            break;
+        };
+        let Some(name_start) = before_hash[..name_end].rfind('"') else {
+            break;
+        };
+        let block = &rest[name_start..];
+        blocks.push(block);
+        rest = &rest[hash_position + "\"hash\"".len()..];
+    }
+
+    blocks
+}
+
+fn asset_name(block: &str) -> Option<String> {
+    let first = block.strip_prefix('"')?;
+    let end = first.find('"')?;
+    Some(first[..end].to_string())
 }
 
 fn resolve_minecraft_libraries(version_text: &str, cache_dir: &Path) -> Result<Vec<MinecraftLibrary>, String> {
