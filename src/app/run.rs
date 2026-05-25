@@ -267,15 +267,7 @@ pub(super) fn launch_minecraft_instance(
     let timed_out = output.timed_out;
     let success = output.status.success() && !timed_out;
     let artifacts = collect_run_artifacts(game_dir, run_dir)?;
-    let failure_class = if artifacts.crash_report.is_some() {
-        "crash_report"
-    } else if timed_out {
-        "timeout"
-    } else if success {
-        "none"
-    } else {
-        "process_exit"
-    };
+    let failure_class = classify_failure(success, timed_out, &artifacts)?;
     fs::write(
         run_dir.join("run.toml"),
         format!(
@@ -327,6 +319,47 @@ pub(super) fn launch_minecraft_instance(
 pub(super) struct RunArtifacts {
     minecraft_log: Option<PathBuf>,
     crash_report: Option<PathBuf>,
+}
+
+pub(super) fn classify_failure(
+    success: bool,
+    timed_out: bool,
+    artifacts: &RunArtifacts,
+) -> Result<&'static str, String> {
+    if artifacts.crash_report.is_some() {
+        return Ok("crash_report");
+    }
+
+    if timed_out {
+        return Ok("timeout");
+    }
+
+    if success {
+        return Ok("none");
+    }
+
+    if let Some(log_path) = &artifacts.minecraft_log {
+        let log = fs::read_to_string(log_path)
+            .map_err(|error| format!("failed to read {}: {error}", log_path.display()))?;
+        let lower = log.to_ascii_lowercase();
+        if lower.contains("mixin apply failed")
+            || lower.contains("mixintransformererror")
+            || lower.contains("mixin transformation")
+        {
+            return Ok("mixin");
+        }
+        if lower.contains("missing") && lower.contains("depend") {
+            return Ok("missing_dependency");
+        }
+        if lower.contains("failed to load") && lower.contains("resource") {
+            return Ok("resource_load");
+        }
+        if lower.contains("bootstraplauncher") || lower.contains("knot") {
+            return Ok("loader_bootstrap");
+        }
+    }
+
+    Ok("process_exit")
 }
 
 pub(super) fn write_launch_plan(
