@@ -282,30 +282,31 @@ pub(super) fn resolve_installer_loader_metadata(
     root: &Path,
     loader: &str,
 ) -> Result<Option<LoaderMetadata>, String> {
-    let Some(url) = installer_loader_meta_url(loader) else {
-        return Ok(None);
-    };
-    let metadata = loader_metadata_text(config, root, loader, &url, instance)?;
+    if let Some(url) = installer_loader_meta_url(loader) {
+        let metadata = loader_metadata_text(config, root, loader, &url, instance)?;
 
-    Ok(Some(LoaderMetadata {
-        kind: loader.to_string(),
-        version: json_string(&metadata, "version").unwrap_or_else(|| {
-            instance
-                .loader_version
-                .clone()
-                .unwrap_or_else(|| "latest".to_string())
-        }),
-        loader_maven: None,
-        intermediary_maven: None,
-        installer_maven: Some(json_string(&metadata, "installer_maven").ok_or_else(|| {
-            format!("{loader} metadata did not include installer maven coordinate")
-        })?),
-        libraries: Vec::new(),
-        client_main_class: json_string(&metadata, "client_main_class")
-            .ok_or_else(|| format!("{loader} metadata did not include client main class"))?,
-        server_main_class: json_string(&metadata, "server_main_class")
-            .ok_or_else(|| format!("{loader} metadata did not include server main class"))?,
-    }))
+        return Ok(Some(LoaderMetadata {
+            kind: loader.to_string(),
+            version: json_string(&metadata, "version").unwrap_or_else(|| {
+                instance
+                    .loader_version
+                    .clone()
+                    .unwrap_or_else(|| "latest".to_string())
+            }),
+            loader_maven: None,
+            intermediary_maven: None,
+            installer_maven: Some(json_string(&metadata, "installer_maven").ok_or_else(|| {
+                format!("{loader} metadata did not include installer maven coordinate")
+            })?),
+            libraries: Vec::new(),
+            client_main_class: json_string(&metadata, "client_main_class")
+                .ok_or_else(|| format!("{loader} metadata did not include client main class"))?,
+            server_main_class: json_string(&metadata, "server_main_class")
+                .ok_or_else(|| format!("{loader} metadata did not include server main class"))?,
+        }));
+    }
+
+    pinned_installer_loader_metadata(loader, instance)
 }
 
 pub(super) fn loader_metadata_text(
@@ -429,6 +430,35 @@ pub(super) fn installer_loader_meta_url(loader: &str) -> Option<String> {
         "neoforge" => env::var("MODSTAGE_NEOFORGE_META_URL").ok(),
         _ => None,
     }
+}
+
+pub(super) fn pinned_installer_loader_metadata(
+    loader: &str,
+    instance: &Instance,
+) -> Result<Option<LoaderMetadata>, String> {
+    let Some(version) = instance.loader_version.as_deref() else {
+        return Ok(None);
+    };
+    if version == "latest" {
+        return Ok(None);
+    }
+
+    let installer_maven = match loader {
+        "neoforge" => format!("net.neoforged:neoforge:{version}"),
+        "forge" => format!("net.minecraftforge:forge:{version}"),
+        _ => return Ok(None),
+    };
+
+    Ok(Some(LoaderMetadata {
+        kind: loader.to_string(),
+        version: version.to_string(),
+        loader_maven: None,
+        intermediary_maven: None,
+        installer_maven: Some(installer_maven),
+        libraries: Vec::new(),
+        client_main_class: "cpw.mods.bootstraplauncher.BootstrapLauncher".to_string(),
+        server_main_class: "cpw.mods.bootstraplauncher.BootstrapLauncher".to_string(),
+    }))
 }
 
 pub(super) fn resolve_minecraft_metadata(
