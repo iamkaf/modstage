@@ -240,16 +240,17 @@ pub(in crate::app) fn pinned_installer_loader_metadata(
     if version == "latest" {
         return Ok(None);
     }
+    let artifact_version = installer_artifact_version(loader, &instance.minecraft, version);
 
     let installer_maven = match loader {
-        "neoforge" => format!("net.neoforged:neoforge:{version}:installer"),
-        "forge" => format!("net.minecraftforge:forge:{version}:installer"),
+        "neoforge" => format!("net.neoforged:neoforge:{artifact_version}:installer"),
+        "forge" => format!("net.minecraftforge:forge:{artifact_version}:installer"),
         _ => return Ok(None),
     };
 
     Ok(Some(LoaderMetadata {
         kind: loader.to_string(),
-        version: version.to_string(),
+        version: artifact_version,
         loader_maven: None,
         intermediary_maven: None,
         installer_maven: Some(installer_maven),
@@ -257,4 +258,12 @@ pub(in crate::app) fn pinned_installer_loader_metadata(
         client_main_class: "cpw.mods.bootstraplauncher.BootstrapLauncher".to_string(),
         server_main_class: "cpw.mods.bootstraplauncher.BootstrapLauncher".to_string(),
     }))
+}
+
+fn installer_artifact_version(loader: &str, minecraft: &str, version: &str) -> String {
+    if loader == "forge" && !version.contains('-') {
+        format!("{minecraft}-{version}")
+    } else {
+        version.to_string()
+    }
 }

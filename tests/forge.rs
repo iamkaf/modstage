@@ -278,7 +278,7 @@ forge = "file://{}"
 name = "forge-pinned-26.1.2"
 minecraft = "26.1.2"
 loader = "forge"
-loader_version = "26.1.2-64.0.4"
+loader_version = "64.0.4"
 sides = ["client", "server"]
 "#,
             metadata.display()

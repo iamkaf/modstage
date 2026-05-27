@@ -225,21 +225,8 @@ pub(super) fn init_project() -> Result<(), String> {
         return Err(format!("{} already exists", config_path.display()));
     }
 
-    let project_name = current_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("modstage-project");
-    let template = format!(
-        r#"[project]
-name = "{project_name}"
-
-[[instance]]
-name = "vanilla-26.1.2"
-minecraft = "26.1.2"
-loader = "vanilla"
-sides = ["client", "server"]
-"#
-    );
+    let detected = DetectedProject::detect(&current_dir)?;
+    let template = detected.to_config();
 
     fs::write(&config_path, template)
         .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
