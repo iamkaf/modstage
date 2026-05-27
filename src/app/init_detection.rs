@@ -283,6 +283,7 @@ fn detect_repositories(root: &Path) -> Result<Vec<(String, String)>, String> {
             push_repository(&mut repositories, name, url);
         }
     }
+    repositories.sort_by_key(|(_, url)| if url == "mavenLocal" { 0 } else { 1 });
     Ok(repositories)
 }
 

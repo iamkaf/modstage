@@ -139,6 +139,11 @@ neoforge = "26.1.2.22-beta"
             "generated config should contain {expected:?}\n{contents}"
         );
     }
+    assert!(
+        contents.find(r#"mavenLocal = "mavenLocal""#)
+            < contents.find(r#"kaf = "https://maven.kaf.sh""#),
+        "mavenLocal should be emitted before other detected Maven repositories\n{contents}"
+    );
 
     fs::remove_dir_all(project).expect("failed to remove project");
 }
