@@ -1,5 +1,6 @@
 use super::*;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 
 const LOADER_METADATA_TTL: Duration = Duration::from_secs(300);
@@ -223,12 +224,16 @@ fn parse_fabric_metadata(metadata: &str) -> Result<FabricMetadata, String> {
     match serde_json::from_str::<FabricMetadata>(metadata) {
         Ok(metadata) => Ok(metadata),
         Err(object_error) => {
-            let mut versions: Vec<FabricMetadata> = serde_json::from_str(metadata)
+            let mut versions: Vec<Value> = serde_json::from_str(metadata)
                 .map_err(|_| format!("failed to parse Fabric metadata: {object_error}"))?;
             versions
                 .drain(..)
                 .next()
                 .ok_or_else(|| "Fabric metadata did not include any versions".to_string())
+                .and_then(|version| {
+                    serde_json::from_value(version)
+                        .map_err(|error| format!("failed to parse Fabric metadata: {error}"))
+                })
         }
     }
 }
@@ -551,5 +556,56 @@ mod tests {
                 .as_deref(),
             Some("1.20.1-47.1.106")
         );
+    }
+
+    #[test]
+    fn fabric_latest_metadata_only_requires_the_first_version_to_be_launchable() {
+        let metadata = r#"[
+  {
+    "loader": {
+      "maven": "net.fabricmc:fabric-loader:0.19.2",
+      "version": "0.19.2"
+    },
+    "intermediary": {
+      "maven": "net.fabricmc:intermediary:0.0.0",
+      "version": "0.0.0"
+    },
+    "launcherMeta": {
+      "libraries": {
+        "common": [
+          {
+            "name": "org.example:library:1.0.0",
+            "url": "https://maven.fabricmc.net/"
+          }
+        ],
+        "client": [],
+        "server": []
+      },
+      "mainClass": {
+        "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+      }
+    }
+  },
+  {
+    "loader": {
+      "version": "old-entry-without-maven"
+    },
+    "intermediary": {
+      "version": "old-entry-without-maven"
+    },
+    "launcherMeta": {
+      "mainClass": {
+        "client": "unused",
+        "server": "unused"
+      }
+    }
+  }
+]"#;
+
+        let parsed = parse_fabric_metadata(metadata).expect("first Fabric version should parse");
+
+        assert_eq!(parsed.loader.maven, "net.fabricmc:fabric-loader:0.19.2");
+        assert_eq!(parsed.loader.version.as_deref(), Some("0.19.2"));
     }
 }

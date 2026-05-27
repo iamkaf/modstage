@@ -60,7 +60,7 @@ impl<'a> InstallerRuntime<'a> {
     }
 
     pub(super) fn neoforge_client_runtime(&self) -> Result<Option<PathBuf>, String> {
-        neoforge_client_runtime(self.config, self.instance, self.dirs)
+        neoforge_client_runtime(self.config, self.instance, self.root, self.dirs)
     }
 }
 
@@ -201,12 +201,13 @@ pub(super) fn prepare_forge_client_artifact(
 pub(super) fn neoforge_client_runtime(
     config: &Config,
     instance: &Instance,
+    root: &Path,
     dirs: &StateDirs,
 ) -> Result<Option<PathBuf>, String> {
     if instance.loader != "neoforge" {
         return Ok(None);
     }
-    let Some(version) = instance.loader_version.as_deref() else {
+    let Some(version) = neoforge_runtime_version(root, instance)? else {
         return Ok(None);
     };
     let coordinate = format!("net.neoforged:neoforge:{version}:universal");
@@ -220,6 +221,19 @@ pub(super) fn neoforge_client_runtime(
     )?
     .map(|artifact| Some(artifact.path))
     .ok_or_else(|| format!("failed to resolve NeoForge runtime `{coordinate}`"))
+}
+
+fn neoforge_runtime_version(root: &Path, instance: &Instance) -> Result<Option<String>, String> {
+    Ok(
+        locked_table_value(root, &instance.name, "loader", "version")?
+            .filter(|version| version != "latest")
+            .or_else(|| {
+                instance
+                    .loader_version
+                    .clone()
+                    .filter(|version| version != "latest")
+            }),
+    )
 }
 
 pub(super) fn prepare_forge_server_launch(
@@ -477,4 +491,50 @@ fn installer_server_args_file(loader: &str, version: &str) -> String {
         "unix_args.txt"
     };
     format!("@libraries/{group_path}/{artifact}/{version}/{file_name}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neoforge_client_runtime_uses_locked_version_before_configured_latest() {
+        let root = env::temp_dir().join(format!(
+            "modstage-neoforge-runtime-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        fs::write(
+            root.join("modstage.lock"),
+            r#"[[instance]]
+instance = "neoforge-client"
+loader = "neoforge"
+
+[minecraft]
+version = "26.1.2"
+
+[loader]
+version = "26.1.2.66-beta"
+"#,
+        )
+        .expect("failed to write lockfile");
+        let instance = Instance {
+            name: "neoforge-client".to_string(),
+            minecraft: "26.1.2".to_string(),
+            loader: "neoforge".to_string(),
+            loader_version: Some("latest".to_string()),
+            sides: vec!["client".to_string()],
+            mods: Vec::new(),
+            fixtures: Vec::new(),
+        };
+
+        assert_eq!(
+            neoforge_runtime_version(&root, &instance)
+                .expect("runtime version should resolve")
+                .as_deref(),
+            Some("26.1.2.66-beta")
+        );
+
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
 }

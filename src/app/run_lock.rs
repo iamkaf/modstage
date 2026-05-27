@@ -46,6 +46,15 @@ impl LockedInstance {
             })
     }
 
+    pub(super) fn table_value(&self, table: &str, key: &str) -> Option<String> {
+        table_string(
+            self.document
+                .get(table)
+                .and_then(Item::as_table)
+                .and_then(|table| table.get(key)),
+        )
+    }
+
     pub(super) fn main_class(&self, side: &str) -> Option<String> {
         let side_key = format!("{side}_main_class");
         self.value(&side_key).or_else(|| self.value("main_class"))
@@ -219,6 +228,15 @@ pub(super) fn locked_value(
     key: &str,
 ) -> Result<Option<String>, String> {
     Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.value(key)))
+}
+
+pub(super) fn locked_table_value(
+    root: &Path,
+    instance: &str,
+    table: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
+    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.table_value(table, key)))
 }
 
 fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
