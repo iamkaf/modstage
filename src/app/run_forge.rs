@@ -149,19 +149,19 @@ pub(super) fn prepare_forge_client_artifact(
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
 
-    let processor_args = forge_processor_args(
+    let processor_args = forge_processor_args(ForgeProcessorArgs {
         processor,
-        &repositories,
-        &maven_cache,
-        &library_dir,
-        &profile,
+        repositories: &repositories,
+        maven_cache: &maven_cache,
+        library_dir: &library_dir,
+        profile: &profile,
         game_dir,
         minecraft_artifact,
-        &patched,
-        &binpatch,
-        &installer.path,
-        &instance.minecraft,
-    )?;
+        patched: &patched,
+        binpatch: &binpatch,
+        installer: &installer.path,
+        minecraft_version: &instance.minecraft,
+    })?;
     let mut processor_command = Command::new(java);
     processor_command
         .arg("-cp")
@@ -323,33 +323,44 @@ fn jar_manifest_main_class(jar: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("processor jar {} has no Main-Class", jar.display()))
 }
 
-fn forge_processor_args(
-    processor: &str,
-    repositories: &[(String, String)],
-    maven_cache: &Path,
-    library_dir: &Path,
-    profile: &str,
-    game_dir: &Path,
-    minecraft_artifact: &Path,
-    patched: &Path,
-    binpatch: &Path,
-    installer: &Path,
-    minecraft_version: &str,
-) -> Result<Vec<String>, String> {
+struct ForgeProcessorArgs<'a> {
+    processor: &'a str,
+    repositories: &'a [(String, String)],
+    maven_cache: &'a Path,
+    library_dir: &'a Path,
+    profile: &'a str,
+    game_dir: &'a Path,
+    minecraft_artifact: &'a Path,
+    patched: &'a Path,
+    binpatch: &'a Path,
+    installer: &'a Path,
+    minecraft_version: &'a str,
+}
+
+fn forge_processor_args(request: ForgeProcessorArgs<'_>) -> Result<Vec<String>, String> {
     let mut data = vec![
         (
             "MINECRAFT_JAR".to_string(),
-            minecraft_artifact.display().to_string(),
+            request.minecraft_artifact.display().to_string(),
         ),
-        ("PATCHED".to_string(), patched.display().to_string()),
-        ("BINPATCH".to_string(), binpatch.display().to_string()),
-        ("ROOT".to_string(), game_dir.display().to_string()),
-        ("LIBRARY_DIR".to_string(), library_dir.display().to_string()),
-        ("INSTALLER".to_string(), installer.display().to_string()),
+        ("PATCHED".to_string(), request.patched.display().to_string()),
+        (
+            "BINPATCH".to_string(),
+            request.binpatch.display().to_string(),
+        ),
+        ("ROOT".to_string(), request.game_dir.display().to_string()),
+        (
+            "LIBRARY_DIR".to_string(),
+            request.library_dir.display().to_string(),
+        ),
+        (
+            "INSTALLER".to_string(),
+            request.installer.display().to_string(),
+        ),
         ("SIDE".to_string(), "client".to_string()),
         (
             "MINECRAFT_VERSION".to_string(),
-            minecraft_version.to_string(),
+            request.minecraft_version.to_string(),
         ),
     ];
     for key in [
@@ -358,16 +369,19 @@ fn forge_processor_args(
         "PATCHED_SHA",
         "MCP_VERSION",
     ] {
-        if let Some(value) = profile_data_client_value(profile, key) {
-            data.push((key.to_string(), profile_data_arg(&value, &library_dir)?));
+        if let Some(value) = profile_data_client_value(request.profile, key) {
+            data.push((
+                key.to_string(),
+                profile_data_arg(&value, request.library_dir)?,
+            ));
         }
     }
 
     let mut args = Vec::new();
-    for arg in json_string_array(processor, "args").unwrap_or_default() {
+    for arg in json_string_array(request.processor, "args").unwrap_or_default() {
         let arg =
             if let Some(coordinate) = arg.strip_prefix('[').and_then(|arg| arg.strip_suffix(']')) {
-                resolve_processor_artifact(repositories, maven_cache, coordinate)?
+                resolve_processor_artifact(request.repositories, request.maven_cache, coordinate)?
                     .display()
                     .to_string()
             } else {

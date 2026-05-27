@@ -1,15 +1,27 @@
 use super::*;
 
-pub(super) fn launch_minecraft_instance(
-    config: &Config,
-    instance: &Instance,
-    side: &str,
-    root: &Path,
-    game_dir: &Path,
-    run_dir: &Path,
-    artifact_url: &str,
-    options: &RunOptions,
-) -> Result<RunResult, String> {
+pub(super) struct LaunchRequest<'a> {
+    pub(super) config: &'a Config,
+    pub(super) instance: &'a Instance,
+    pub(super) side: &'a str,
+    pub(super) root: &'a Path,
+    pub(super) game_dir: &'a Path,
+    pub(super) run_dir: &'a Path,
+    pub(super) artifact_url: &'a str,
+    pub(super) options: &'a RunOptions,
+}
+
+pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<RunResult, String> {
+    let LaunchRequest {
+        config,
+        instance,
+        side,
+        root,
+        game_dir,
+        run_dir,
+        artifact_url,
+        options,
+    } = request;
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let artifact_name = format!("{side}.jar");
@@ -289,10 +301,10 @@ pub(super) fn selected_java(
         return Ok(java.clone());
     }
 
-    if let Some(major) = locked_java_major(root, &instance.name)? {
-        if let Some(java) = managed_java_for_major(major)? {
-            return Ok(java);
-        }
+    if let Some(major) = locked_java_major(root, &instance.name)?
+        && let Some(java) = managed_java_for_major(major)?
+    {
+        return Ok(java);
     }
 
     Ok(PathBuf::from(java_bin()))

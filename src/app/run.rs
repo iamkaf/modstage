@@ -73,16 +73,16 @@ pub(super) fn run_instance(
         "client_url"
     };
     if let Some(artifact_url) = locked_minecraft_url(&project.root, &instance.name, artifact_key)? {
-        let result = launch_minecraft_instance(
-            &project.config,
+        let result = launch_minecraft_instance(LaunchRequest {
+            config: &project.config,
             instance,
             side,
-            &project.root,
-            &game_dir,
-            &run_dir,
-            &artifact_url,
-            &options,
-        )?;
+            root: &project.root,
+            game_dir: &game_dir,
+            run_dir: &run_dir,
+            artifact_url: &artifact_url,
+            options: &options,
+        })?;
 
         if result.success {
             return Ok(());

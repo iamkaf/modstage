@@ -129,9 +129,7 @@ pub(super) fn copy_fixture_tree(
         let entry = entry.map_err(|error| format!("failed to read fixture entry: {error}"))?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_fixture_tree(&source_path, &destination_path, replace)?;
-        } else if source_path.is_file() {
+        if source_path.is_dir() || source_path.is_file() {
             copy_fixture_tree(&source_path, &destination_path, replace)?;
         }
     }

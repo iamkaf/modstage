@@ -466,7 +466,7 @@ fn resolve_uses_ordered_file_maven_repositories_for_single_jar_mods() {
         .expect("failed to write repository jar");
     fs::write(
         project.join("modstage.toml"),
-        &format!(
+        format!(
             r#"[project]
 name = "resolve-file-repo"
 

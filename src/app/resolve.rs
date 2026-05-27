@@ -27,7 +27,7 @@ pub(super) fn resolve_instance(
     for instance in &instances {
         resolve_instance_lock(
             &mut lock,
-            &config,
+            config,
             instance,
             &project.root,
             &repositories,
@@ -73,7 +73,7 @@ pub(super) fn resolve_instance_lock(
         .flatten()
         {
             if let Some(resolved) =
-                resolved_maven_library_artifact(&repositories, &maven_cache, coordinate, None)?
+                resolved_maven_library_artifact(repositories, maven_cache, coordinate, None)?
             {
                 let is_installer = loader.installer_maven.as_deref() == Some(coordinate);
                 if is_installer && matches!(loader.kind.as_str(), "forge" | "neoforge") {
@@ -121,7 +121,7 @@ pub(super) fn resolve_instance_lock(
             )];
             if let Some(entry) = resolved_maven_library_with_side(
                 &repository,
-                &maven_cache,
+                maven_cache,
                 &library.name,
                 Some(&library.side),
             )? {
@@ -142,7 +142,7 @@ pub(super) fn resolve_instance_lock(
             let resolved = resolve_modrinth_mod(config, instance, config_root, &modrinth)?;
             lock.modrinth_mod(source, resolved);
         } else if let Some(coordinates) = MavenCoordinates::parse(source) {
-            let Some(artifact) = resolve_maven_artifact(&repositories, &coordinates, &maven_cache)?
+            let Some(artifact) = resolve_maven_artifact(repositories, &coordinates, maven_cache)?
             else {
                 return Err(format!(
                     "failed to resolve Maven mod `{source}` from ordered repositories"
