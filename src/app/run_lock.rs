@@ -1,7 +1,9 @@
 use super::*;
+use toml_edit::{DocumentMut, Item, Table};
 
 pub(super) struct LockedInstance {
-    block: String,
+    header: String,
+    document: DocumentMut,
 }
 
 impl LockedInstance {
@@ -13,13 +15,35 @@ impl LockedInstance {
 
         let lock = fs::read_to_string(&lock_path)
             .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-        Ok(instance_block(&lock, instance).map(|block| Self {
-            block: block.to_string(),
+        let Some(block) = instance_block(&lock, instance) else {
+            return Ok(None);
+        };
+        let (header, body) = split_instance_body(block);
+        let document = body
+            .parse::<DocumentMut>()
+            .map_err(|error| format!("failed to parse {}: {error}", lock_path.display()))?;
+
+        Ok(Some(Self {
+            header: header.to_string(),
+            document,
         }))
     }
 
     pub(super) fn value(&self, key: &str) -> Option<String> {
-        block_string_value(&self.block, key)
+        block_string_value(&self.header, key)
+            .or_else(|| table_string(self.document.get(key)))
+            .or_else(|| {
+                ["minecraft", "loader", "launch", "assets"]
+                    .into_iter()
+                    .find_map(|table| {
+                        table_string(
+                            self.document
+                                .get(table)
+                                .and_then(Item::as_table)
+                                .and_then(|table| table.get(key)),
+                        )
+                    })
+            })
     }
 
     pub(super) fn main_class(&self, side: &str) -> Option<String> {
@@ -40,19 +64,25 @@ impl LockedInstance {
     pub(super) fn arguments(&self, kind: &str) -> Vec<String> {
         let mut args = Vec::new();
 
-        for block in self.block.split("[[argument]]").skip(1) {
-            if block_string_value(block, "kind").as_deref() == Some(kind)
-                && let Some(arg) = block_string_value(block, "arg")
-            {
-                args.push(arg);
-            }
-        }
+        let Some(arguments) = self
+            .document
+            .get("argument")
+            .and_then(Item::as_array_of_tables)
+        else {
+            return args;
+        };
+
+        args.extend(arguments.iter().filter_map(|argument| {
+            (table_string(argument.get("kind")).as_deref() == Some(kind))
+                .then(|| table_string(argument.get("arg")))
+                .flatten()
+        }));
 
         args
     }
 
-    fn sections<'a>(&'a self, section: &str) -> impl Iterator<Item = &'a str> {
-        self.block.split(section).skip(1)
+    fn array_tables(&self, name: &str) -> Option<&toml_edit::ArrayOfTables> {
+        self.document.get(name).and_then(Item::as_array_of_tables)
     }
 }
 
@@ -140,13 +170,13 @@ pub(super) fn restore_locked_mod(
     let Some(lock) = LockedInstance::read(root, instance)? else {
         return Ok(None);
     };
-    for block in lock.sections("[[mod]]") {
-        if block_string_value(block, "source").as_deref() == Some(source)
-            && let Some(path) = block_string_value(block, "path")
-            && let Some(sha256) = block_string_value(block, "sha256")
+    for block in lock.array_tables("mod").into_iter().flatten() {
+        if table_string(block.get("source")).as_deref() == Some(source)
+            && let Some(path) = table_string(block.get("path"))
+            && let Some(sha256) = table_string(block.get("sha256"))
         {
             let path = PathBuf::from(path);
-            let url = block_string_value(block, "url");
+            let url = table_string(block.get("url"));
             let path = if path.is_file() {
                 path
             } else if let Some(url) = &url {
@@ -191,10 +221,24 @@ pub(super) fn locked_value(
     Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.value(key)))
 }
 
-pub(super) fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
+fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
     lock.split("[[instance]]")
         .skip(1)
         .find(|block| block_string_value(block, "instance").as_deref() == Some(instance))
+}
+
+fn split_instance_body(block: &str) -> (&str, &str) {
+    let body_start = block
+        .lines()
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len() + 1;
+            Some((start, line))
+        })
+        .find_map(|(start, line)| line.trim_start().starts_with('[').then_some(start))
+        .unwrap_or(block.len());
+
+    block.split_at(body_start)
 }
 
 pub(super) fn locked_main_class(
@@ -232,23 +276,23 @@ pub(super) fn fetch_locked_libraries(
         return Ok(Vec::new());
     };
     let mut libraries = Vec::new();
-    for block in lock.sections("[[library]]") {
-        if let Some(library_side) = block_string_value(block, "side")
+    for block in lock.array_tables("library").into_iter().flatten() {
+        if let Some(library_side) = table_string(block.get("side"))
             && library_side != "common"
             && library_side != side
         {
             continue;
         }
-        let file_name = block_string_value(block, "path")
+        let file_name = table_string(block.get("path"))
             .and_then(|path| path.rsplit('/').next().map(str::to_string))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "library.jar".to_string());
-        let name = block_string_value(block, "name").unwrap_or_else(|| file_name.clone());
-        if let Some(url) = block_string_value(block, "url") {
+        let name = table_string(block.get("name")).unwrap_or_else(|| file_name.clone());
+        if let Some(url) = table_string(block.get("url")) {
             let path = fetch_to_cache(&url, cache_dir, &file_name)?;
             verify_locked_library_hash(block, &name, &path)?;
             libraries.push(path);
-        } else if let Some(path) = block_string_value(block, "path") {
+        } else if let Some(path) = table_string(block.get("path")) {
             let path = PathBuf::from(path);
             verify_locked_library_hash(block, &name, &path)?;
             libraries.push(path);
@@ -259,11 +303,11 @@ pub(super) fn fetch_locked_libraries(
 }
 
 pub(super) fn verify_locked_library_hash(
-    block: &str,
+    block: &Table,
     name: &str,
     path: &Path,
 ) -> Result<(), String> {
-    let Some(expected) = block_string_value(block, "sha256") else {
+    let Some(expected) = table_string(block.get("sha256")) else {
         return Ok(());
     };
     let bytes = fs::read(path)
@@ -276,6 +320,17 @@ pub(super) fn verify_locked_library_hash(
     }
 
     Ok(())
+}
+
+fn table_string(item: Option<&Item>) -> Option<String> {
+    let item = item?;
+    if let Some(value) = item.as_str() {
+        Some(value.to_string())
+    } else if let Some(value) = item.as_integer() {
+        Some(value.to_string())
+    } else {
+        item.as_bool().map(|value| value.to_string())
+    }
 }
 
 pub(super) fn fetch_locked_assets(

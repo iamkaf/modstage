@@ -196,7 +196,9 @@ This section is for people changing Modstage itself.
 | Build debug binary | `cargo build` |
 | Build release binary | `cargo build --release` |
 | Run checks | `cargo check` |
+| Run lint checks | `cargo clippy --all-targets -- -D warnings` |
 | Run tests | `cargo test` |
+| Audit dependencies | `cargo audit --deny warnings` |
 | Check formatting | `cargo fmt -- --check` |
 | Format code | `cargo fmt` |
 

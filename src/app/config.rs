@@ -1,4 +1,5 @@
 use super::*;
+use toml_edit::{DocumentMut, Item};
 
 pub(super) struct Config {
     pub(super) project_name: String,
@@ -25,137 +26,13 @@ pub(super) struct Fixture {
 
 impl Config {
     pub(super) fn parse(contents: &str) -> Result<Self, String> {
+        let document = contents
+            .parse::<DocumentMut>()
+            .map_err(|error| format!("failed to parse modstage.toml: {error}"))?;
         let project_name = project_name(contents)
             .ok_or_else(|| "modstage.toml must contain [project] with a name".to_string())?;
-        let mut section = "";
-        let mut repositories = Vec::new();
-        let mut instances = Vec::new();
-        let mut current: Option<Instance> = None;
-        let mut current_fixture: Option<Fixture> = None;
-        let mut multiline_array: Option<(String, Vec<String>)> = None;
-
-        for line in contents.lines() {
-            let line = line.trim();
-
-            if let Some((key, values)) = multiline_array.as_mut() {
-                if line == "]" {
-                    if key == "mods"
-                        && let Some(instance) = current.as_mut()
-                    {
-                        instance.mods = values.clone();
-                    }
-                    multiline_array = None;
-                    continue;
-                }
-
-                values.push(line.trim_end_matches(',').trim_matches('"').to_string());
-                continue;
-            }
-
-            if line == "[repositories]" {
-                section = "repositories";
-                continue;
-            }
-
-            if line == "[[instance]]" {
-                if let Some(fixture) = current_fixture.take()
-                    && let Some(instance) = current.as_mut()
-                {
-                    instance.fixtures.push(fixture);
-                }
-                if let Some(instance) = current.take() {
-                    instances.push(instance);
-                }
-
-                section = "instance";
-                current = Some(Instance {
-                    name: String::new(),
-                    minecraft: String::new(),
-                    loader: String::new(),
-                    loader_version: None,
-                    sides: Vec::new(),
-                    mods: Vec::new(),
-                    fixtures: Vec::new(),
-                });
-                continue;
-            }
-
-            if line == "[[instance.fixture]]" {
-                if let Some(fixture) = current_fixture.take()
-                    && let Some(instance) = current.as_mut()
-                {
-                    instance.fixtures.push(fixture);
-                }
-
-                section = "fixture";
-                current_fixture = Some(Fixture {
-                    from: String::new(),
-                    to: ".".to_string(),
-                    side: None,
-                    replace: false,
-                });
-                continue;
-            }
-
-            if line.starts_with('[') {
-                section = "";
-                continue;
-            }
-
-            if section == "repositories" {
-                if let Some((name, url)) = key_value(line) {
-                    repositories.push((name, url));
-                }
-                continue;
-            }
-
-            if section == "fixture" {
-                let Some(fixture) = current_fixture.as_mut() else {
-                    continue;
-                };
-
-                if let Some(value) = string_value(line, "from") {
-                    fixture.from = value;
-                } else if let Some(value) = string_value(line, "to") {
-                    fixture.to = value;
-                } else if let Some(value) = string_value(line, "side") {
-                    fixture.side = Some(value);
-                } else if let Some(value) = bool_value(line, "replace") {
-                    fixture.replace = value;
-                }
-                continue;
-            }
-
-            let Some(instance) = current.as_mut() else {
-                continue;
-            };
-
-            if let Some(value) = string_value(line, "name") {
-                instance.name = value;
-            } else if let Some(value) = string_value(line, "minecraft") {
-                instance.minecraft = value;
-            } else if let Some(value) = string_value(line, "loader") {
-                instance.loader = value;
-            } else if let Some(value) = string_value(line, "loader_version") {
-                instance.loader_version = Some(value);
-            } else if let Some(value) = string_array_value(line, "sides") {
-                instance.sides = value;
-            } else if let Some(value) = string_array_value(line, "mods") {
-                instance.mods = value;
-            } else if line == "mods = [" {
-                multiline_array = Some(("mods".to_string(), Vec::new()));
-            }
-        }
-
-        if let Some(fixture) = current_fixture.take()
-            && let Some(instance) = current.as_mut()
-        {
-            instance.fixtures.push(fixture);
-        }
-
-        if let Some(instance) = current.take() {
-            instances.push(instance);
-        }
+        let repositories = repositories_from_document(&document);
+        let instances = instances_from_document(&document);
 
         for instance in &instances {
             if instance.name.is_empty() {
@@ -208,6 +85,75 @@ impl Config {
     }
 }
 
+fn repositories_from_document(document: &DocumentMut) -> Vec<(String, String)> {
+    document
+        .get("repositories")
+        .and_then(Item::as_table)
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(name, item)| {
+                    item.as_str().map(|url| (name.to_string(), url.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn instances_from_document(document: &DocumentMut) -> Vec<Instance> {
+    document
+        .get("instance")
+        .and_then(Item::as_array_of_tables)
+        .map(|instances| {
+            instances
+                .iter()
+                .map(|table| Instance {
+                    name: table_string(table.get("name")).unwrap_or_default(),
+                    minecraft: table_string(table.get("minecraft")).unwrap_or_default(),
+                    loader: table_string(table.get("loader")).unwrap_or_default(),
+                    loader_version: table_string(table.get("loader_version")),
+                    sides: table_string_array(table.get("sides")),
+                    mods: table_string_array(table.get("mods")),
+                    fixtures: table
+                        .get("fixture")
+                        .and_then(Item::as_array_of_tables)
+                        .map(|fixtures| {
+                            fixtures
+                                .iter()
+                                .map(|fixture| Fixture {
+                                    from: table_string(fixture.get("from")).unwrap_or_default(),
+                                    to: table_string(fixture.get("to"))
+                                        .unwrap_or_else(|| ".".to_string()),
+                                    side: table_string(fixture.get("side")),
+                                    replace: fixture
+                                        .get("replace")
+                                        .and_then(Item::as_bool)
+                                        .unwrap_or(false),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn table_string(item: Option<&Item>) -> Option<String> {
+    item.and_then(Item::as_str).map(str::to_string)
+}
+
+fn table_string_array(item: Option<&Item>) -> Vec<String> {
+    item.and_then(Item::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn is_supported_loader(loader: &str) -> bool {
     matches!(loader, "vanilla" | "fabric" | "forge" | "neoforge")
 }
@@ -234,65 +180,19 @@ pub(super) fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
 }
 
 pub(super) fn project_name(contents: &str) -> Option<String> {
-    let mut in_project = false;
-
-    for line in contents.lines() {
-        let line = line.trim();
-
-        if line.starts_with('[') {
-            in_project = line == "[project]";
-            continue;
-        }
-
-        if !in_project {
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("name") {
-            let value = value.trim_start();
-            let value = value.strip_prefix('=')?.trim();
-            return Some(value.trim_matches('"').to_string());
-        }
-    }
-
-    None
+    contents
+        .parse::<DocumentMut>()
+        .ok()?
+        .get("project")?
+        .get("name")?
+        .as_str()
+        .map(str::to_string)
 }
 
 pub(super) fn string_value(line: &str, key: &str) -> Option<String> {
     let value = line.strip_prefix(key)?.trim_start();
     let value = value.strip_prefix('=')?.trim();
     Some(value.trim_matches('"').to_string())
-}
-
-pub(super) fn key_value(line: &str) -> Option<(String, String)> {
-    let (key, value) = line.split_once('=')?;
-    Some((
-        key.trim().to_string(),
-        value.trim().trim_matches('"').to_string(),
-    ))
-}
-
-pub(super) fn bool_value(line: &str, key: &str) -> Option<bool> {
-    let value = line.strip_prefix(key)?.trim_start();
-    let value = value.strip_prefix('=')?.trim();
-    match value {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-pub(super) fn string_array_value(line: &str, key: &str) -> Option<Vec<String>> {
-    let value = line.strip_prefix(key)?.trim_start();
-    let value = value.strip_prefix('=')?.trim();
-    let value = value.strip_prefix('[')?.strip_suffix(']')?;
-    Some(
-        value
-            .split(',')
-            .map(|item| item.trim().trim_matches('"').to_string())
-            .filter(|item| !item.is_empty())
-            .collect(),
-    )
 }
 
 pub(super) fn local_mod_path(root: &Path, source: &str) -> Option<PathBuf> {

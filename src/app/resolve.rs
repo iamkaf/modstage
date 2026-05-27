@@ -1,4 +1,5 @@
 use super::*;
+use rayon::prelude::*;
 
 pub(super) fn resolve_instance(
     explicit_config: Option<PathBuf>,
@@ -130,45 +131,117 @@ pub(super) fn resolve_instance_lock(
         }
     }
     lock.mods(&instance.mods);
-    for source in &instance.mods {
-        if let Some(path) = local_mod_path(config_root, source) {
-            let path = path.canonicalize().map_err(|error| {
-                format!("failed to resolve local mod {}: {error}", path.display())
-            })?;
-            let bytes = fs::read(&path)
-                .map_err(|error| format!("failed to read local mod {}: {error}", path.display()))?;
-            lock.local_mod(source, &path, sha256_hex(&bytes));
-        } else if let Some(modrinth) = modrinth_source(source) {
-            let resolved = resolve_modrinth_mod(config, instance, config_root, &modrinth)?;
-            lock.modrinth_mod(source, resolved);
-        } else if let Some(coordinates) = MavenCoordinates::parse(source) {
-            let Some(artifact) = resolve_maven_artifact(repositories, &coordinates, maven_cache)?
-            else {
-                return Err(format!(
-                    "failed to resolve Maven mod `{source}` from ordered repositories"
-                ));
-            };
-            let raw_path = artifact.path;
-            let path = raw_path.canonicalize().map_err(|error| {
-                format!(
-                    "failed to resolve Maven artifact {}: {error}",
-                    raw_path.display()
-                )
-            })?;
-            let bytes = fs::read(&path).map_err(|error| {
-                format!("failed to read Maven artifact {}: {error}", path.display())
-            })?;
-            lock.maven_mod(
+    let resolved_mods = instance
+        .mods
+        .par_iter()
+        .map(|source| {
+            resolve_mod_source(
+                config,
+                instance,
+                config_root,
+                repositories,
+                maven_cache,
                 source,
-                artifact.repository,
-                artifact.url,
-                &path,
-                sha256_hex(&bytes),
-            );
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for resolved in resolved_mods.into_iter().flatten() {
+        match resolved {
+            ResolvedMod::Local {
+                source,
+                path,
+                sha256,
+            } => lock.local_mod(&source, &path, sha256),
+            ResolvedMod::Modrinth { source, resolved } => lock.modrinth_mod(&source, resolved),
+            ResolvedMod::Maven {
+                source,
+                repository,
+                url,
+                path,
+                sha256,
+            } => lock.maven_mod(&source, repository, url, &path, sha256),
         }
     }
 
     Ok(())
+}
+
+enum ResolvedMod {
+    Local {
+        source: String,
+        path: PathBuf,
+        sha256: String,
+    },
+    Modrinth {
+        source: String,
+        resolved: ModrinthMod,
+    },
+    Maven {
+        source: String,
+        repository: String,
+        url: Option<String>,
+        path: PathBuf,
+        sha256: String,
+    },
+}
+
+fn resolve_mod_source(
+    config: &Config,
+    instance: &Instance,
+    config_root: &Path,
+    repositories: &[(String, String)],
+    maven_cache: &Path,
+    source: &str,
+) -> Result<Option<ResolvedMod>, String> {
+    if let Some(path) = local_mod_path(config_root, source) {
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()))?;
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("failed to read local mod {}: {error}", path.display()))?;
+        return Ok(Some(ResolvedMod::Local {
+            source: source.to_string(),
+            path,
+            sha256: sha256_hex(&bytes),
+        }));
+    }
+
+    if let Some(modrinth) = modrinth_source(source) {
+        let resolved = resolve_modrinth_mod(config, instance, config_root, &modrinth)?;
+        return Ok(Some(ResolvedMod::Modrinth {
+            source: source.to_string(),
+            resolved,
+        }));
+    }
+
+    if let Some(coordinates) = MavenCoordinates::parse(source) {
+        let Some(artifact) = resolve_maven_artifact(repositories, &coordinates, maven_cache)?
+        else {
+            return Err(format!(
+                "failed to resolve Maven mod `{source}` from ordered repositories"
+            ));
+        };
+        let raw_path = artifact.path;
+        let path = raw_path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve Maven artifact {}: {error}",
+                raw_path.display()
+            )
+        })?;
+        let bytes = fs::read(&path).map_err(|error| {
+            format!("failed to read Maven artifact {}: {error}", path.display())
+        })?;
+        return Ok(Some(ResolvedMod::Maven {
+            source: source.to_string(),
+            repository: artifact.repository,
+            url: artifact.url,
+            path,
+            sha256: sha256_hex(&bytes),
+        }));
+    }
+
+    Ok(None)
 }
 
 pub(super) fn resolved_maven_library_with_side(

@@ -1,4 +1,5 @@
 use super::*;
+use rayon::prelude::*;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -215,35 +216,38 @@ fn resolve_minecraft_libraries_from_version(
     version_json: &MojangVersion,
     cache_dir: &Path,
 ) -> Result<Vec<MinecraftLibrary>, String> {
-    let mut libraries = Vec::new();
+    version_json
+        .libraries
+        .as_deref()
+        .unwrap_or_default()
+        .par_iter()
+        .filter_map(|library| {
+            library
+                .downloads
+                .as_ref()
+                .and_then(|downloads| downloads.artifact.as_ref())
+                .map(|artifact| (library, artifact))
+        })
+        .map(|(library, artifact)| {
+            let file_name = artifact
+                .path
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("library.jar");
+            let library_path =
+                fetch_to_cache(&artifact.url, &cache_dir.join("libraries"), file_name)?;
+            let bytes = fs::read(&library_path)
+                .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
 
-    for library in version_json.libraries.as_deref().unwrap_or_default() {
-        let Some(artifact) = library
-            .downloads
-            .as_ref()
-            .and_then(|downloads| downloads.artifact.as_ref())
-        else {
-            continue;
-        };
-        let file_name = artifact
-            .path
-            .rsplit('/')
-            .next()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("library.jar");
-        let library_path = fetch_to_cache(&artifact.url, &cache_dir.join("libraries"), file_name)?;
-        let bytes = fs::read(&library_path)
-            .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
-
-        libraries.push(MinecraftLibrary {
-            name: library.name.clone(),
-            path: artifact.path.clone(),
-            url: artifact.url.clone(),
-            sha256: sha256_hex(&bytes),
-        });
-    }
-
-    Ok(libraries)
+            Ok(MinecraftLibrary {
+                name: library.name.clone(),
+                path: artifact.path.clone(),
+                url: artifact.url.clone(),
+                sha256: sha256_hex(&bytes),
+            })
+        })
+        .collect()
 }
 
 pub(in crate::app) fn mojang_manifest_url() -> Option<String> {

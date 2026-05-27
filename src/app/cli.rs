@@ -1,154 +1,150 @@
 use super::*;
-
-pub(super) const ROOT_HELP: &str = "\
-modstage
-
-Usage:
-  modstage [--config <path>] <command>
-
-Commands:
-  init
-  resolve [instance]
-  run <client|server> <instance>
-  inspect <config|lock|instance|run>
-  clean <instance|cache>
-  java <list|install|doctor>
-
-Options:
-  --config <path>  Use an explicit modstage.toml
-  -h, --help       Show help
-";
+use clap::{Arg, ArgAction, ArgMatches, Command, error::ErrorKind};
 
 pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
-    let invocation = Invocation::parse(args)?;
-
-    if invocation.args.is_empty() || is_help(&invocation.args) {
-        print!("{ROOT_HELP}");
-        return Ok(());
-    }
-
-    match invocation.args.as_slice() {
-        [command, rest @ ..] if rest.last().is_some_and(|arg| is_help_arg(arg)) => {
-            print!("{}", help_for(command, rest)?);
-            Ok(())
-        }
-        [command] if command == "init" => init_project(),
-        [command] if command == "resolve" => resolve_instance(invocation.config, None),
-        [command, instance] if command == "resolve" => {
-            resolve_instance(invocation.config, Some(instance))
-        }
-        [command, side, instance, rest @ ..] if command == "run" => {
-            run_instance(invocation.config, side, instance, rest)
-        }
-        [command, subject] if command == "inspect" && subject == "config" => {
-            inspect_config(invocation.config)
-        }
-        [command, subject] if command == "inspect" && subject == "lock" => {
-            inspect_lock(invocation.config, None)
-        }
-        [command, subject, instance] if command == "inspect" && subject == "lock" => {
-            inspect_lock(invocation.config, Some(instance))
-        }
-        [command, subject, run_id] if command == "inspect" && subject == "run" => {
-            inspect_run(invocation.config, run_id)
-        }
-        [command, subject, instance, rest @ ..]
-            if command == "inspect" && subject == "instance" =>
-        {
-            inspect_instance(invocation.config, instance, rest)
-        }
-        [command, ..] if command == "inspect" => {
-            println!("inspect is not implemented yet");
-            Ok(())
-        }
-        [command, subject, instance, rest @ ..] if command == "clean" && subject == "instance" => {
-            clean_instance(invocation.config, instance, rest)
-        }
-        [command, subject] if command == "clean" && subject == "cache" => {
-            clean_cache(invocation.config)
-        }
-        [command, ..] if command == "clean" => Err("unknown clean command".to_string()),
-        [command, subject] if command == "java" && subject == "list" => java_list(),
-        [command, subject, rest @ ..] if command == "java" && subject == "doctor" => {
-            java_doctor(rest)
-        }
-        [command, subject, major, rest @ ..] if command == "java" && subject == "install" => {
-            java_install(major, rest)
-        }
-        [command, ..] if command == "java" => Err("unknown java command".to_string()),
-        [command, ..] => Err(format!("unknown command `{command}`\n\n{ROOT_HELP}")),
-        [] => unreachable!("empty args handled above"),
-    }
-}
-
-pub(super) struct Invocation {
-    config: Option<PathBuf>,
-    args: Vec<String>,
-}
-
-impl Invocation {
-    fn parse(args: Vec<String>) -> Result<Self, String> {
-        let mut config = None;
-        let mut parsed = Vec::new();
-        let mut iter = args.into_iter();
-
-        while let Some(arg) = iter.next() {
-            if arg == "--config" {
-                let path = iter
-                    .next()
-                    .ok_or_else(|| "--config requires a path".to_string())?;
-                config = Some(PathBuf::from(path));
-            } else {
-                parsed.push(arg);
-                parsed.extend(iter);
-                break;
+    let matches =
+        match cli().try_get_matches_from(std::iter::once("modstage".to_string()).chain(args)) {
+            Ok(matches) => matches,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+                ) =>
+            {
+                print!("{error}");
+                return Ok(());
             }
-        }
+            Err(error) => return Err(error.to_string()),
+        };
+    let config = matches.get_one::<PathBuf>("config").cloned();
 
-        Ok(Self {
+    match matches.subcommand() {
+        Some(("init", _)) => init_project(),
+        Some(("resolve", command)) => resolve_instance(
             config,
-            args: parsed,
-        })
+            command.get_one::<String>("instance").map(String::as_str),
+        ),
+        Some(("run", command)) => {
+            let rest = rest(command);
+            run_instance(
+                config,
+                required(command, "side")?,
+                required(command, "instance")?,
+                &rest,
+            )
+        }
+        Some(("inspect", command)) => match command.subcommand() {
+            Some(("config", _)) => inspect_config(config),
+            Some(("lock", command)) => inspect_lock(
+                config,
+                command.get_one::<String>("instance").map(String::as_str),
+            ),
+            Some(("instance", command)) => {
+                let rest = rest(command);
+                inspect_instance(config, required(command, "instance")?, &rest)
+            }
+            Some(("run", command)) => inspect_run(config, required(command, "run_id")?),
+            _ => Ok(()),
+        },
+        Some(("clean", command)) => match command.subcommand() {
+            Some(("instance", command)) => {
+                let rest = rest(command);
+                clean_instance(config, required(command, "instance")?, &rest)
+            }
+            Some(("cache", _)) => clean_cache(config),
+            _ => Ok(()),
+        },
+        Some(("java", command)) => match command.subcommand() {
+            Some(("list", _)) => java_list(),
+            Some(("doctor", command)) => {
+                let rest = rest(command);
+                java_doctor(&rest)
+            }
+            Some(("install", command)) => {
+                let rest = rest(command);
+                java_install(required(command, "major")?, &rest)
+            }
+            _ => Ok(()),
+        },
+        _ => {
+            print!("{}", cli().render_help());
+            Ok(())
+        }
     }
 }
 
-pub(super) fn is_help(args: &[String]) -> bool {
-    matches!(args, [arg] if is_help_arg(arg))
+fn cli() -> Command {
+    Command::new("modstage")
+        .arg(
+            Arg::new("config")
+                .long("config")
+                .value_name("path")
+                .value_parser(clap::value_parser!(PathBuf))
+                .help("Use an explicit modstage.toml")
+                .global(true),
+        )
+        .subcommand(Command::new("init"))
+        .subcommand(Command::new("resolve").arg(Arg::new("instance")))
+        .subcommand(
+            Command::new("run")
+                .arg(
+                    Arg::new("side")
+                        .required(true)
+                        .value_parser(["client", "server"]),
+                )
+                .arg(Arg::new("instance").required(true))
+                .arg(rest_arg()),
+        )
+        .subcommand(
+            Command::new("inspect")
+                .subcommand(Command::new("config"))
+                .subcommand(Command::new("lock").arg(Arg::new("instance")))
+                .subcommand(
+                    Command::new("instance")
+                        .arg(Arg::new("instance").required(true))
+                        .arg(rest_arg()),
+                )
+                .subcommand(Command::new("run").arg(Arg::new("run_id").required(true))),
+        )
+        .subcommand(
+            Command::new("clean")
+                .subcommand(
+                    Command::new("instance")
+                        .arg(Arg::new("instance").required(true))
+                        .arg(rest_arg()),
+                )
+                .subcommand(Command::new("cache")),
+        )
+        .subcommand(
+            Command::new("java")
+                .subcommand(Command::new("list"))
+                .subcommand(Command::new("doctor").arg(rest_arg()))
+                .subcommand(
+                    Command::new("install")
+                        .arg(Arg::new("major").required(true))
+                        .arg(rest_arg()),
+                ),
+        )
 }
 
-pub(super) fn is_help_arg(arg: &str) -> bool {
-    arg == "--help" || arg == "-h"
+fn rest_arg() -> Arg {
+    Arg::new("rest")
+        .action(ArgAction::Append)
+        .num_args(0..)
+        .trailing_var_arg(true)
+        .allow_hyphen_values(true)
 }
 
-pub(super) fn help_for(command: &str, rest: &[String]) -> Result<&'static str, String> {
-    let help = match (command, rest) {
-        ("init", _) => "Usage:\n  modstage init\n",
-        ("resolve", _) => "Usage:\n  modstage resolve [instance]\n",
-        ("run", _) => "Usage:\n  modstage run <client|server> <instance>\n",
-        ("inspect", [subject, ..]) if subject == "config" => "Usage:\n  modstage inspect config\n",
-        ("inspect", [subject, ..]) if subject == "lock" => {
-            "Usage:\n  modstage inspect lock [instance]\n"
-        }
-        ("inspect", [subject, ..]) if subject == "instance" => {
-            "Usage:\n  modstage inspect instance <instance> [--side <client|server>]\n"
-        }
-        ("inspect", [subject, ..]) if subject == "run" => {
-            "Usage:\n  modstage inspect run <run-id>\n"
-        }
-        ("inspect", _) => "Usage:\n  modstage inspect <config|lock|instance|run>\n",
-        ("clean", [subject, ..]) if subject == "instance" => {
-            "Usage:\n  modstage clean instance <instance> [--side <client|server>]\n"
-        }
-        ("clean", [subject, ..]) if subject == "cache" => "Usage:\n  modstage clean cache\n",
-        ("clean", _) => "Usage:\n  modstage clean <instance|cache>\n",
-        ("java", [subject, ..]) if subject == "list" => "Usage:\n  modstage java list\n",
-        ("java", [subject, ..]) if subject == "install" => {
-            "Usage:\n  modstage java install <major>\n"
-        }
-        ("java", [subject, ..]) if subject == "doctor" => "Usage:\n  modstage java doctor\n",
-        ("java", _) => "Usage:\n  modstage java <list|install|doctor>\n",
-        _ => return Err(format!("unknown command `{command}`")),
-    };
+fn required<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, String> {
+    matches
+        .get_one::<String>(name)
+        .map(String::as_str)
+        .ok_or_else(|| format!("missing required argument `{name}`"))
+}
 
-    Ok(help)
+fn rest(matches: &ArgMatches) -> Vec<String> {
+    matches
+        .get_many::<String>("rest")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default()
 }
