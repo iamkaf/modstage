@@ -2,6 +2,8 @@ use super::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+const MODRINTH_METADATA_TTL: Duration = Duration::from_secs(300);
+
 #[derive(Deserialize)]
 struct ModrinthVersionMetadata {
     id: String,
@@ -47,13 +49,14 @@ pub(in crate::app) fn resolve_modrinth_mod(
         .join("modrinth")
         .join(source.project);
     let metadata_url = modrinth_versions_url(source.project, instance);
-    let metadata_path = fetch_to_cache(
+    let metadata_path = fetch_to_cache_with_ttl(
         &metadata_url,
         &cache_dir,
         &format!(
             "{}-{}-{}.json",
             source.project, instance.minecraft, instance.loader
         ),
+        MODRINTH_METADATA_TTL,
     )?;
     let metadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
@@ -111,6 +114,9 @@ fn select_modrinth_version<'a>(
     let Some(version) = source.version else {
         return versions.first();
     };
+    if version == "latest" {
+        return versions.first();
+    }
 
     versions
         .iter()

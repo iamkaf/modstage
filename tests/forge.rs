@@ -216,6 +216,89 @@ sides = ["client", "server"]
 }
 
 #[test]
+fn resolve_forge_latest_uses_forge_maven_metadata() {
+    let project = temp_dir("forge-manifest-project");
+    let metadata = temp_dir("forge-manifest-metadata");
+    let data_home = temp_dir("forge-manifest-data");
+    let cache_home = temp_dir("forge-manifest-cache");
+    let forge_manifest = metadata.join("forge-manifest.json");
+    fs::write(
+        &forge_manifest,
+        r#"{
+  "1.20.1": [
+    "1.20.1-47.3.1"
+  ],
+  "26.1.2": [
+    "26.1.2-64.0.3",
+    "26.1.2-64.0.4"
+  ]
+}"#,
+    )
+    .expect("failed to write Forge manifest");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "forge-manifest-test"
+
+[[instance]]
+name = "forge-latest-26.1.2"
+minecraft = "26.1.2"
+loader = "forge"
+loader_version = "latest"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", forge_manifest.display());
+    let output = run_in_with_env(
+        &["resolve", "forge-latest-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_FORGE_MAVEN_METADATA_URL", &manifest_url),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    for expected in [
+        "[loader]",
+        r#"kind = "forge""#,
+        r#"version = "26.1.2-64.0.4""#,
+        r#"installer_maven = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+    assert!(
+        !lock.contains("64.0.3"),
+        "latest should use the newest Forge version for the selected Minecraft version\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
 #[cfg(unix)]
 fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
     let project = temp_dir("forge-pinned-project");

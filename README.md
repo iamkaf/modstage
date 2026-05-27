@@ -33,9 +33,9 @@ Create a config in your mod project, resolve it, then run one side:
 
 ```bash
 cd /path/to/your-mod
-modstage init
-modstage resolve
-modstage run client example-fabric-26.1.2
+modstage init # Creates the modstage.toml file, edit it to your preferences
+modstage resolve # Creates the lock file
+modstage run client example-fabric-26.1.2 # Runs a Minecraft instance
 ```
 
 Edit `modstage.toml` before resolving:
@@ -52,11 +52,11 @@ kaf = "https://maven.kaf.sh"
 name = "example-fabric-26.1.2"
 minecraft = "26.1.2"
 loader = "fabric"
-loader_version = "0.19.2"
+loader_version = "latest"
 sides = ["client", "server"]
 mods = [
   "maven:com.example:example-fabric:1.0.0+26.1.2",
-  "modrinth:fabric-api",
+  "modrinth:fabric-api:latest",
   "./local-tooling.jar",
 ]
 ```
@@ -107,11 +107,15 @@ The starter config above is enough for a normal Fabric client/server check. Add 
 | `[[instance]].name` | Stable instance id for `resolve`, `run`, and `inspect` |
 | `minecraft` | Mojang Minecraft version |
 | `loader` | `vanilla`, `fabric`, `forge`, or `neoforge` |
-| `loader_version` | Exact loader version, or `latest` where supported |
+| `loader_version` | Exact loader version, or `latest` to resolve the newest loader for `minecraft` |
 | `sides` | `client`, `server`, or both |
-| `mods` | Direct Modrinth ids, Maven single-jar coordinates, or local jars |
+| `mods` | Modrinth ids, Maven single-jar coordinates, or local jars |
 
 Repository fallback is normal ordered Maven fallback. The first repository that contains an artifact wins.
+
+Use `modrinth:project:version` for a specific Modrinth version number or version id. Use `modrinth:project:latest`, or omit the version, to resolve the newest Modrinth version matching the instance loader and Minecraft version.
+
+`latest` metadata is cached briefly, then refreshed. Lockfiles keep the exact resolved versions.
 
 ### Commands
 

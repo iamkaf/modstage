@@ -1,8 +1,15 @@
 use super::*;
 use std::sync::LazyLock;
 
+const HTTP_USER_AGENT: &str = concat!(
+    "iamkaf/modstage/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/iamkaf/modstage)"
+);
+
 static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     reqwest::blocking::Client::builder()
+        .user_agent(HTTP_USER_AGENT)
         .build()
         .expect("HTTP client configuration should be valid")
 });
@@ -12,9 +19,33 @@ pub(super) fn fetch_to_cache(
     cache_dir: &Path,
     file_name: &str,
 ) -> Result<PathBuf, String> {
+    fetch_to_cache_inner(url, cache_dir, file_name, None)
+}
+
+pub(super) fn fetch_to_cache_with_ttl(
+    url: &str,
+    cache_dir: &Path,
+    file_name: &str,
+    ttl: Duration,
+) -> Result<PathBuf, String> {
+    fetch_to_cache_inner(url, cache_dir, file_name, Some(ttl))
+}
+
+fn fetch_to_cache_inner(
+    url: &str,
+    cache_dir: &Path,
+    file_name: &str,
+    ttl: Option<Duration>,
+) -> Result<PathBuf, String> {
     fs::create_dir_all(cache_dir)
         .map_err(|error| format!("failed to create {}: {error}", cache_dir.display()))?;
     let destination = cache_dir.join(file_name);
+
+    if let Some(ttl) = ttl
+        && cached_file_is_fresh(&destination, ttl)
+    {
+        return Ok(destination);
+    }
 
     if let Some(path) = url.strip_prefix("file://") {
         fs::copy(path, &destination).map_err(|error| {
@@ -55,6 +86,16 @@ pub(super) fn fetch_to_cache(
     }
 
     Err(format!("unsupported URL `{url}`"))
+}
+
+fn cached_file_is_fresh(path: &Path, ttl: Duration) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified.elapsed().is_ok_and(|age| age <= ttl)
 }
 
 pub(super) struct ResolvedMavenArtifact {

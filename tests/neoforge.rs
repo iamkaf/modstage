@@ -216,6 +216,93 @@ sides = ["client", "server"]
 }
 
 #[test]
+fn resolve_neoforge_latest_uses_neoforged_maven_metadata() {
+    let project = temp_dir("neoforge-manifest-project");
+    let metadata = temp_dir("neoforge-manifest-metadata");
+    let data_home = temp_dir("neoforge-manifest-data");
+    let cache_home = temp_dir("neoforge-manifest-cache");
+    let neoforge_manifest = metadata.join("neoforge-manifest.json");
+    fs::write(
+        &neoforge_manifest,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>net.neoforged</groupId>
+  <artifactId>neoforge</artifactId>
+  <versioning>
+    <versions>
+      <version>21.1.231</version>
+      <version>26.1.2.21-beta</version>
+      <version>26.1.2.22-beta</version>
+    </versions>
+  </versioning>
+</metadata>
+"#,
+    )
+    .expect("failed to write NeoForge manifest");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "neoforge-manifest-test"
+
+[[instance]]
+name = "neoforge-latest-26.1.2"
+minecraft = "26.1.2"
+loader = "neoforge"
+loader_version = "latest"
+sides = ["client", "server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", neoforge_manifest.display());
+    let output = run_in_with_env(
+        &["resolve", "neoforge-latest-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_NEOFORGE_MAVEN_METADATA_URL", &manifest_url),
+            (
+                "XDG_DATA_HOME",
+                data_home.to_str().expect("data path is not UTF-8"),
+            ),
+            (
+                "XDG_CACHE_HOME",
+                cache_home.to_str().expect("cache path is not UTF-8"),
+            ),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock =
+        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    for expected in [
+        "[loader]",
+        r#"kind = "neoforge""#,
+        r#"version = "26.1.2.22-beta""#,
+        r#"installer_maven = "net.neoforged:neoforge:26.1.2.22-beta:installer""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lockfile should contain {expected:?}\n{lock}"
+        );
+    }
+    assert!(
+        !lock.contains("26.1.2.21-beta"),
+        "latest should use the newest NeoForge version for the selected Minecraft version\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
 #[cfg(unix)]
 fn resolve_uses_pinned_neoforge_loader_version_without_metadata_override() {
     let project = temp_dir("neoforge-pinned-project");

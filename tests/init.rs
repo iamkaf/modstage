@@ -245,6 +245,8 @@ displayName="Metadata Mod"
     for expected in [
         r#"name = "metadata_mod""#,
         r#"name = "metadata_mod-fabric-26.1.2""#,
+        "# `latest` resolves the newest loader available for this Minecraft version at resolve time.",
+        r#"loader_version = "latest""#,
         r#"name = "metadata_mod-forge-26.1.2""#,
         r#"name = "metadata_mod-neoforge-26.1.2""#,
     ] {

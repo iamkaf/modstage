@@ -77,7 +77,11 @@ impl DetectedProject {
                 escape_toml(&instance.minecraft)
             ));
             out.push_str(&format!("loader = \"{}\"\n", escape_toml(&instance.loader)));
-            if let Some(version) = &instance.loader_version {
+            if instance.loader != "vanilla" {
+                let version = instance.loader_version.as_deref().unwrap_or("latest");
+                if version == "latest" {
+                    out.push_str("# `latest` resolves the newest loader available for this Minecraft version at resolve time.\n");
+                }
                 out.push_str(&format!("loader_version = \"{}\"\n", escape_toml(version)));
             }
             out.push_str("sides = [\"client\", \"server\"]\n");
