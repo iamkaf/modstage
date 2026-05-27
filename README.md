@@ -11,79 +11,34 @@
 </p>
 
 <p align="center">
+  <a href="#using-modstage">Using Modstage</a> ·
   <a href="#why">Why</a> ·
-  <a href="#quick-start">Quick Start</a> ·
   <a href="#configuration">Configuration</a> ·
-  <a href="#commands">Commands</a> ·
-  <a href="#runtime-behavior">Runtime Behavior</a>
+  <a href="#developing-modstage">Developing Modstage</a>
 </p>
 
 ---
 
-Modstage stages and launches real Minecraft from a reproducible project file. It is built for mod developers who need to test the jars users actually install, without relying on Gradle run configs, IDE state, or a GUI launcher profile.
+Modstage stages and launches real Minecraft from a reproducible project file. Use it when you want to test the same published mod jars your users install, outside Gradle, IDE run configs, and GUI launcher state.
 
 The launcher is headless. Minecraft is not.
 
-## Why
+## Using Modstage
 
-Mod development has a gap between "works in Gradle" and "works in a production launcher." Modstage targets that gap.
+This section is for mod developers who want to run Modstage against their own mod jars.
 
-It checks the failure modes that dev classpaths often hide:
+### Quick Start
 
-| Risk | What Modstage Does |
-| --- | --- |
-| Loader wiring | Resolves and launches Fabric, Forge, NeoForge, or vanilla |
-| Published artifact drift | Uses published, Maven-local, Modrinth, or local jar inputs |
-| Mixin failures | Captures full client/server logs and classpath |
-| Resource processing issues | Runs the same client/server jar shape users run |
-| Dependency alignment | Resolves Maven libraries through ordered repositories |
-| Dirty launcher state | Reconciles `mods/` from the lockfile on each run |
-
-## How It Works
-
-```text
-modstage.toml
-  -> resolve Mojang, loader, library, asset, and mod metadata
-  -> write modstage.lock
-  -> restore locked artifacts into cache
-  -> reconcile durable instance state
-  -> launch Java
-  -> write logs, launch plan, crash reports, and run.toml
-```
-
-`modstage.toml` is the file humans edit. `modstage.lock` is the generated launch graph.
-
-## Quick Start
-
-Build from source:
+Create a config in your mod project, resolve it, then run one side:
 
 ```bash
-cargo build --release
+cd /path/to/your-mod
+modstage init
+modstage resolve
+modstage run client example-fabric-26.1.2
 ```
 
-Create a config:
-
-```bash
-target/release/modstage init
-```
-
-Resolve and run:
-
-```bash
-target/release/modstage resolve
-target/release/modstage run server my-instance --locked --timeout 120s
-```
-
-Run a project from another directory:
-
-```bash
-target/release/modstage --config ../example-mod/modstage.toml resolve
-target/release/modstage --config ../example-mod/modstage.toml run client example-fabric-26.1.2 --locked --timeout 120s
-```
-
-## Configuration
-
-Minimal project:
+Edit `modstage.toml` before resolving:
 
 ```toml
 [project]
@@ -106,6 +61,45 @@ mods = [
 ]
 ```
 
+Run from anywhere with an explicit config:
+
+```bash
+modstage --config /path/to/example/modstage.toml run server example-fabric-26.1.2
+```
+
+### Why
+
+Mod development has a gap between "works in Gradle" and "works in a production launcher." Modstage targets that gap.
+
+It checks the failure modes that dev classpaths often hide:
+
+| Risk | What Modstage Does |
+| --- | --- |
+| Loader wiring | Resolves and launches Fabric, Forge, NeoForge, or vanilla |
+| Published artifact drift | Uses published, Maven-local, Modrinth, or local jar inputs |
+| Mixin failures | Captures full client/server logs and classpath |
+| Resource processing issues | Runs the same client/server jar shape users run |
+| Dependency alignment | Resolves Maven libraries through ordered repositories |
+| Dirty launcher state | Reconciles `mods/` from the lockfile on each run |
+
+### How It Works
+
+```text
+modstage.toml
+  -> resolve Mojang, loader, library, asset index, and mod metadata
+  -> write modstage.lock
+  -> restore locked artifacts into cache
+  -> reconcile durable instance state
+  -> launch Java
+  -> write logs, launch plan, crash reports, and run.toml
+```
+
+`modstage.toml` is the file humans edit. `modstage.lock` is the generated launch graph.
+
+### Configuration
+
+The starter config above is enough for a normal Fabric client/server check. Add more `[[instance]]` blocks for Forge, NeoForge, server-only checks, or vanilla baselines.
+
 | Field | Description |
 | --- | --- |
 | `[project].name` | Project name used in state paths |
@@ -119,7 +113,7 @@ mods = [
 
 Repository fallback is normal ordered Maven fallback. The first repository that contains an artifact wins.
 
-## Commands
+### Commands
 
 | Command | Description |
 | --- | --- |
@@ -142,7 +136,7 @@ Global option:
 | --- | --- |
 | `--config <path>` | Use an explicit `modstage.toml` |
 
-## Runtime Behavior
+### Runtime Behavior
 
 Modstage keeps state in two places:
 
@@ -166,7 +160,7 @@ Server runs watch for the standard Minecraft ready line, send `stop`, and accept
 
 Forge and NeoForge use installer metadata. Modstage reads installer profiles, resolves processor classpaths, expands launcher placeholders, runs client processors when needed, and uses installer-generated server argfiles for server launches.
 
-## Reports
+### Reports
 
 Every run writes a report directory under the project run root.
 
@@ -181,17 +175,37 @@ Every run writes a report directory under the project run root.
 
 Failure classes include timeout, crash report, mixin failure, Minecraft startup failure, and process failure.
 
-## Downloads
+### Downloads
 
-Modstage uses Mojang's normal launcher asset model. Assets come from the asset index and are stored by object hash under `assets/objects/<prefix>/<hash>`.
+Modstage records and verifies Mojang's asset index so the client receives the expected `--assetIndex` and `--assetsDir` arguments. It does not lock or restore individual Minecraft asset objects; modstage is for testing mods, not validating Mojang's asset CDN contents.
 
-Downloads use `reqwest` with Rustls. Locked asset restoration is parallel by default.
+Downloads use `reqwest` with Rustls.
 
-| Setting | Default | Description |
-| --- | ---: | --- |
-| `MODSTAGE_DOWNLOAD_CONCURRENCY` | `32` | Worker count for restoring missing locked assets |
+---
 
-## CI And Releases
+## Developing Modstage
+
+This section is for people changing Modstage itself.
+
+| Task | Command |
+| --- | --- |
+| Build debug binary | `cargo build` |
+| Build release binary | `cargo build --release` |
+| Run checks | `cargo check` |
+| Run tests | `cargo test` |
+| Check formatting | `cargo fmt -- --check` |
+| Format code | `cargo fmt` |
+
+Keep user-facing behavior covered by integration tests under `tests/`. Runtime behavior should use bounded fake Java or bounded launcher runs so test jobs cannot hang.
+
+Automation should use locked, bounded runs:
+
+```bash
+modstage resolve
+modstage run client example-fabric-26.1.2 --locked --timeout 120s
+```
+
+### CI And Releases
 
 | Workflow | Trigger | Behavior |
 | --- | --- | --- |
