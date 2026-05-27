@@ -173,14 +173,6 @@ impl LockfileWriter {
         self.doc.string("id", assets.id);
         self.doc.string("index_url", assets.index_url);
         self.doc.string("index_sha256", assets.index_sha256);
-        for asset in assets.objects {
-            self.doc.blank();
-            self.doc.array_table("asset");
-            self.doc.string("name", asset.name);
-            self.doc.string("hash", asset.hash);
-            self.doc.integer("size", asset.size);
-            self.doc.string("url", asset.url);
-        }
     }
 }
 

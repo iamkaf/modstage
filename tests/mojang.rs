@@ -583,17 +583,15 @@ sides = ["client", "server"]
 }
 
 #[test]
-fn resolve_fetches_and_records_mojang_assets() {
+fn resolve_records_mojang_asset_index_without_objects() {
     let project = temp_dir("mojang-assets-project");
     let metadata = temp_dir("mojang-assets-metadata");
     let data_home = temp_dir("mojang-assets-data");
     let cache_home = temp_dir("mojang-assets-cache");
     let client = metadata.join("client.jar");
     let server = metadata.join("server.jar");
-    let asset = metadata.join("asset.ogg");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
-    fs::write(&asset, b"asset").expect("failed to write asset object");
     let asset_hash = "05fac94380a70241f23780e7aef62b190894238f";
     let assets_json = metadata.join("assets-26.json");
     fs::write(
@@ -604,11 +602,10 @@ fn resolve_fetches_and_records_mojang_assets() {
     "minecraft/sounds/example.ogg": {{
       "hash": "{asset_hash}",
       "size": 5,
-      "url": "file://{}"
+      "url": "file:///ignored-asset-object"
     }}
   }}
 }}"#,
-            asset.display()
         ),
     )
     .expect("failed to write asset index json");
@@ -688,142 +685,22 @@ sides = ["client", "server"]
         "[assets]",
         r#"id = "26""#,
         &format!(r#"index_url = "file://{}""#, assets_json.display()),
-        "[[asset]]",
-        r#"name = "minecraft/sounds/example.ogg""#,
-        &format!(r#"hash = "{asset_hash}""#),
-        r#"size = 5"#,
-        &format!(r#"url = "file://{}""#, asset.display()),
     ] {
         assert!(
             lock.contains(expected),
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
-
-    fs::remove_dir_all(project).expect("failed to remove project");
-    fs::remove_dir_all(metadata).expect("failed to remove metadata");
-    fs::remove_dir_all(data_home).expect("failed to remove data home");
-    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-}
-
-#[test]
-fn resolve_derives_mojang_asset_object_urls_from_hashes() {
-    let project = temp_dir("mojang-derived-assets-project");
-    let metadata = temp_dir("mojang-derived-assets-metadata");
-    let data_home = temp_dir("mojang-derived-assets-data");
-    let cache_home = temp_dir("mojang-derived-assets-cache");
-    let asset_store = temp_dir("mojang-derived-assets-store");
-    let client = metadata.join("client.jar");
-    let server = metadata.join("server.jar");
-    let asset_hash = "05fac94380a70241f23780e7aef62b190894238f";
-    let asset_object_dir = asset_store.join("07");
-    fs::create_dir_all(&asset_object_dir).expect("failed to create asset store");
-    fs::write(&client, b"client").expect("failed to write client jar");
-    fs::write(&server, b"server").expect("failed to write server jar");
-    let assets_json = metadata.join("assets-26.json");
-    fs::write(
-        &assets_json,
-        format!(
-            r#"{{
-  "objects": {{
-    "minecraft/sounds/example.ogg": {{
-      "hash": "{asset_hash}",
-      "size": 5
-    }}
-  }}
-}}"#
-        ),
-    )
-    .expect("failed to write asset index json");
-    let version_json = metadata.join("26.1.2.json");
-    fs::write(
-        &version_json,
-        format!(
-            r#"{{
-  "id": "26.1.2",
-  "assetIndex": {{
-    "id": "26",
-    "url": "file://{}"
-  }},
-  "javaVersion": {{ "majorVersion": 25 }},
-  "downloads": {{
-    "client": {{ "url": "file://{}" }},
-    "server": {{ "url": "file://{}" }}
-  }}
-}}"#,
-            assets_json.display(),
-            client.display(),
-            server.display()
-        ),
-    )
-    .expect("failed to write version json");
-    let manifest = metadata.join("version_manifest.json");
-    fs::write(
-        &manifest,
-        format!(
-            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
-        ),
-    )
-    .expect("failed to write manifest");
-    fs::write(
-        project.join("modstage.toml"),
-        r#"[project]
-name = "mojang-derived-assets-test"
-
-[[instance]]
-name = "vanilla-derived-assets-26.1.2"
-minecraft = "26.1.2"
-loader = "vanilla"
-sides = ["client", "server"]
-"#,
-    )
-    .expect("failed to write config");
-
-    let manifest_url = format!("file://{}", manifest.display());
-    let asset_base_url = format!("file://{}", asset_store.display());
-    let output = run_in_with_env(
-        &["resolve", "vanilla-derived-assets-26.1.2"],
-        &project,
-        &[
-            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("MODSTAGE_MOJANG_ASSET_BASE_URL", &asset_base_url),
-            (
-                "XDG_DATA_HOME",
-                data_home.to_str().expect("data path is not UTF-8"),
-            ),
-            (
-                "XDG_CACHE_HOME",
-                cache_home.to_str().expect("cache path is not UTF-8"),
-            ),
-        ],
-    );
-
     assert!(
-        output.status.success(),
-        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !lock.contains("[[asset]]")
+            && !lock.contains("minecraft/sounds/example.ogg")
+            && !lock.contains(asset_hash)
+            && !lock.contains("ignored-asset-object"),
+        "lockfile must not record individual Minecraft asset objects\n{lock}"
     );
-
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
-    let expected_url = format!("file://{}/05/{asset_hash}", asset_store.display());
-    for expected in [
-        "[[asset]]",
-        r#"name = "minecraft/sounds/example.ogg""#,
-        &format!(r#"hash = "{asset_hash}""#),
-        &format!(r#"url = "{expected_url}""#),
-    ] {
-        assert!(
-            lock.contains(expected),
-            "lockfile should contain {expected:?}\n{lock}"
-        );
-    }
 
     fs::remove_dir_all(project).expect("failed to remove project");
     fs::remove_dir_all(metadata).expect("failed to remove metadata");
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-    fs::remove_dir_all(asset_store).expect("failed to remove asset store");
 }

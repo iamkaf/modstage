@@ -2949,33 +2949,26 @@ sides = ["client"]
 
 #[test]
 #[cfg(unix)]
-fn locked_client_run_restores_assets_from_the_lockfile_before_launch() {
+fn locked_client_run_restores_asset_index_before_launch() {
     let project = temp_dir("run-locked-assets-project");
     let metadata = temp_dir("run-locked-assets-metadata");
     let data_home = temp_dir("run-locked-assets-data");
     let cache_home = temp_dir("run-locked-assets-cache");
     let server = metadata.join("server.jar");
     let client = metadata.join("client.jar");
-    let asset = metadata.join("asset.ogg");
-    let asset_hash = "05fac94380a70241f23780e7aef62b190894238f";
     fs::write(&server, b"server").expect("failed to write server jar");
     fs::write(&client, b"client").expect("failed to write client jar");
-    fs::write(&asset, b"asset").expect("failed to write asset object");
     let asset_index = metadata.join("assets-26.json");
     fs::write(
         &asset_index,
-        format!(
-            r#"{{
+        r#"{{
   "objects": {{
     "minecraft/sounds/example.ogg": {{
-      "hash": "{asset_hash}",
-      "size": 5,
-      "url": "file://{}"
+      "hash": "05fac94380a70241f23780e7aef62b190894238f",
+      "size": 5
     }}
   }}
 }}"#,
-            asset.display()
-        ),
     )
     .expect("failed to write asset index");
     let version_json = metadata.join("26.1.2.json");
@@ -3013,9 +3006,7 @@ fn locked_client_run_restores_assets_from_the_lockfile_before_launch() {
     let fake_java = metadata.join("fake-java-locked-assets");
     fs::write(
         &fake_java,
-        format!(
-            "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/05/{asset_hash}\" || exit 13\nprintf 'assets restored\\n'\n"
-        ),
+        "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest ! -d \"$assets_dir/objects\" || exit 13\nprintf 'asset index restored\\n'\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)
@@ -3086,16 +3077,15 @@ sides = ["client"]
     );
     assert!(
         run.status.success(),
-        "locked client run should restore assets before launching Java\nstdout:\n{}\nstderr:\n{}",
+        "locked client run should restore the asset index before launching Java\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&run.stdout).contains("assets restored"),
-        "fake Java should confirm the restored asset layout"
+        String::from_utf8_lossy(&run.stdout).contains("asset index restored"),
+        "fake Java should confirm the restored asset index"
     );
 
-    fs::remove_file(&asset).expect("failed to remove source asset object");
     let cached_run = run_in_with_env(
         &[
             "run",
@@ -3115,7 +3105,7 @@ sides = ["client"]
     );
     assert!(
         cached_run.status.success(),
-        "locked client run should reuse an already verified asset cache\nstdout:\n{}\nstderr:\n{}",
+        "locked client run should reuse an already verified asset index\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&cached_run.stdout),
         String::from_utf8_lossy(&cached_run.stderr)
     );

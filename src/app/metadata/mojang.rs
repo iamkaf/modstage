@@ -1,6 +1,5 @@
 use super::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 struct MojangManifest {
@@ -65,18 +64,6 @@ struct MojangAssetIndex {
     url: String,
 }
 
-#[derive(Deserialize)]
-struct MojangAssetIndexObjects {
-    objects: BTreeMap<String, MojangAssetObject>,
-}
-
-#[derive(Deserialize)]
-struct MojangAssetObject {
-    hash: String,
-    size: u32,
-    url: Option<String>,
-}
-
 pub(in crate::app) struct MinecraftMetadata {
     pub(in crate::app) manifest_url: String,
     pub(in crate::app) manifest_sha256: String,
@@ -103,14 +90,6 @@ pub(in crate::app) struct MinecraftAssets {
     pub(in crate::app) id: String,
     pub(in crate::app) index_url: String,
     pub(in crate::app) index_sha256: String,
-    pub(in crate::app) objects: Vec<MinecraftAsset>,
-}
-
-pub(in crate::app) struct MinecraftAsset {
-    pub(in crate::app) name: String,
-    pub(in crate::app) hash: String,
-    pub(in crate::app) size: u32,
-    pub(in crate::app) url: String,
 }
 
 pub(in crate::app) fn resolve_minecraft_metadata(
@@ -224,44 +203,12 @@ fn resolve_minecraft_assets_from_version(
     )?;
     let index = fs::read(&index_path)
         .map_err(|error| format!("failed to read {}: {error}", index_path.display()))?;
-    let index_json: MojangAssetIndexObjects = serde_json::from_slice(&index)
-        .map_err(|error| format!("failed to parse Minecraft asset index: {error}"))?;
-    let objects = index_json
-        .objects
-        .into_iter()
-        .map(|(name, object)| {
-            let url = object
-                .url
-                .unwrap_or_else(|| minecraft_asset_url(&object.hash));
-            MinecraftAsset {
-                name,
-                hash: object.hash,
-                size: object.size,
-                url,
-            }
-        })
-        .collect();
 
     Ok(Some(MinecraftAssets {
         id: id.clone(),
         index_url: index_url.clone(),
         index_sha256: sha256_hex(&index),
-        objects,
     }))
-}
-
-pub(in crate::app) fn asset_object_dir(cache_dir: &Path, hash: &str) -> PathBuf {
-    let prefix = hash.get(..2).unwrap_or(hash);
-    cache_dir.join("assets").join("objects").join(prefix)
-}
-
-pub(in crate::app) fn minecraft_asset_url(hash: &str) -> String {
-    let base = std::env::var("MODSTAGE_MOJANG_ASSET_BASE_URL")
-        .unwrap_or_else(|_| "https://resources.download.minecraft.net".to_string());
-    let base = base.trim_end_matches('/');
-    let prefix = hash.get(..2).unwrap_or(hash);
-
-    format!("{base}/{prefix}/{hash}")
 }
 
 fn resolve_minecraft_libraries_from_version(
