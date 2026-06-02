@@ -34,7 +34,6 @@ Create a config in your mod project, resolve it, then run one side:
 ```bash
 cd /path/to/your-mod
 modstage init # Creates the modstage.toml file, edit it to your preferences
-modstage resolve # Creates the lock file
 modstage run client example-fabric-26.1.2 # Runs a Minecraft instance
 ```
 
