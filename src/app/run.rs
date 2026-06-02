@@ -20,7 +20,7 @@ pub(super) fn run_instance(
         ));
     }
 
-    let lock_path = project.lock_path();
+    let lock_path = project.lock_path(selected)?;
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
@@ -34,7 +34,7 @@ pub(super) fn run_instance(
     }
     let mod_cache = project.dirs.cache.join("downloads").join("mods");
     if options.locked {
-        verify_locked_mod_hashes(&project.root, instance, &mod_cache)?;
+        verify_locked_mod_hashes(&lock_path, instance, &mod_cache)?;
     }
     let game_dir = project
         .dirs
@@ -48,7 +48,7 @@ pub(super) fn run_instance(
 
     fs::create_dir_all(&mods_dir)
         .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
-    reconcile_mods(&project.root, instance, &mods_dir, &mod_cache)?;
+    reconcile_mods(&project.root, &lock_path, instance, &mods_dir, &mod_cache)?;
     apply_fixtures(&project.root, side, instance, &game_dir)?;
 
     if side == "server" {
@@ -72,12 +72,13 @@ pub(super) fn run_instance(
     } else {
         "client_url"
     };
-    if let Some(artifact_url) = locked_minecraft_url(&project.root, &instance.name, artifact_key)? {
+    if let Some(artifact_url) = locked_minecraft_url(&lock_path, &instance.name, artifact_key)? {
         let result = launch_minecraft_instance(LaunchRequest {
             config: &project.config,
             instance,
             side,
             root: &project.root,
+            lock_path: &lock_path,
             game_dir: &game_dir,
             run_dir: &run_dir,
             artifact_url: &artifact_url,

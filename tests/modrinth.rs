@@ -73,6 +73,35 @@ fn default_mojang_manifest(root: &Path) -> String {
     format!("file://{}", manifest.display())
 }
 
+fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
+    data_home
+        .join("modstage")
+        .join("instances")
+        .join(format!(
+            "{project_name}-{:08x}",
+            stable_hash(
+                &root
+                    .canonicalize()
+                    .expect("project root should canonicalize")
+                    .display()
+                    .to_string()
+            )
+        ))
+        .join(instance)
+        .join("modstage.lock")
+}
+
+fn stable_hash(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+
+    hash
+}
+
 #[test]
 fn resolve_downloads_direct_modrinth_mod_file_into_the_lockfile() {
     let project = temp_dir("modrinth-project");
@@ -146,8 +175,13 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "modrinth-test",
+        "modrinth-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[[mod]]",
@@ -259,8 +293,13 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "modrinth-pinned-test",
+        "modrinth-pinned-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         r#"source = "modrinth:sample-mod:2.0.0""#,
@@ -373,8 +412,13 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "modrinth-latest-test",
+        "modrinth-latest-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     for expected in [
         r#"source = "modrinth:sample-mod:latest""#,
         r#"version_id = "latest-version""#,
@@ -476,8 +520,13 @@ mods = [
         String::from_utf8_lossy(&second.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "modrinth-cache-test",
+        "modrinth-cache-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     assert!(
         lock.contains(r#"version_id = "sample-version""#),
         "lockfile should be resolved from cached metadata\n{lock}"

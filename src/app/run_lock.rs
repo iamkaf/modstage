@@ -7,8 +7,7 @@ pub(super) struct LockedInstance {
 }
 
 impl LockedInstance {
-    pub(super) fn read(root: &Path, instance: &str) -> Result<Option<Self>, String> {
-        let lock_path = root.join("modstage.lock");
+    pub(super) fn read(lock_path: &Path, instance: &str) -> Result<Option<Self>, String> {
         if !lock_path.is_file() {
             return Ok(None);
         }
@@ -96,13 +95,13 @@ impl LockedInstance {
 }
 
 pub(super) fn verify_locked_mod_hashes(
-    root: &Path,
+    lock_path: &Path,
     instance: &Instance,
     cache_dir: &Path,
 ) -> Result<(), String> {
     for source in &instance.mods {
         let Some((path, expected)) =
-            restore_locked_mod_path_and_hash(root, &instance.name, source, cache_dir)?
+            restore_locked_mod_path_and_hash(lock_path, &instance.name, source, cache_dir)?
         else {
             continue;
         };
@@ -120,13 +119,13 @@ pub(super) fn verify_locked_mod_hashes(
 }
 
 pub(super) fn verify_locked_artifact_hash(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     side: &str,
     artifact: &Path,
 ) -> Result<(), String> {
     let key = format!("{side}_sha256");
-    let Some(expected) = locked_value(root, instance, &key)? else {
+    let Some(expected) = locked_value(lock_path, instance, &key)? else {
         return Ok(());
     };
     let bytes = fs::read(artifact).map_err(|error| {
@@ -151,32 +150,32 @@ pub(super) struct LockedMod {
 }
 
 pub(super) fn restore_locked_mod_path_and_hash(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    restore_locked_mod(root, instance, source, cache_dir)
+    restore_locked_mod(lock_path, instance, source, cache_dir)
         .map(|locked| locked.map(|locked| (locked.path, locked.sha256)))
 }
 
 pub(super) fn restore_locked_mod_path(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    restore_locked_mod(root, instance, source, cache_dir)
+    restore_locked_mod(lock_path, instance, source, cache_dir)
         .map(|locked| locked.map(|locked| locked.path))
 }
 
 pub(super) fn restore_locked_mod(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     source: &str,
     cache_dir: &Path,
 ) -> Result<Option<LockedMod>, String> {
-    let Some(lock) = LockedInstance::read(root, instance)? else {
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
         return Ok(None);
     };
     for block in lock.array_tables("mod").into_iter().flatten() {
@@ -215,28 +214,28 @@ pub(super) fn lock_is_stale_for_instance(lock_path: &Path, instance: &str) -> Re
 }
 
 pub(super) fn locked_minecraft_url(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
-    locked_value(root, instance, key)
+    locked_value(lock_path, instance, key)
 }
 
 pub(super) fn locked_value(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
-    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.value(key)))
+    Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.value(key)))
 }
 
 pub(super) fn locked_table_value(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     table: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
-    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.table_value(table, key)))
+    Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.table_value(table, key)))
 }
 
 fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
@@ -260,37 +259,37 @@ fn split_instance_body(block: &str) -> (&str, &str) {
 }
 
 pub(super) fn locked_main_class(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     side: &str,
 ) -> Result<Option<String>, String> {
-    Ok(LockedInstance::read(root, instance)?.and_then(|lock| lock.main_class(side)))
+    Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.main_class(side)))
 }
 
-pub(super) fn locked_java_major(root: &Path, instance: &str) -> Result<Option<u32>, String> {
-    LockedInstance::read(root, instance)?
+pub(super) fn locked_java_major(lock_path: &Path, instance: &str) -> Result<Option<u32>, String> {
+    LockedInstance::read(lock_path, instance)?
         .map(|lock| lock.java_major())
         .transpose()
         .map(Option::flatten)
 }
 
 pub(super) fn locked_arguments(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     kind: &str,
 ) -> Result<Vec<String>, String> {
-    Ok(LockedInstance::read(root, instance)?
+    Ok(LockedInstance::read(lock_path, instance)?
         .map(|lock| lock.arguments(kind))
         .unwrap_or_default())
 }
 
 pub(super) fn fetch_locked_libraries(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     cache_dir: &Path,
     side: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    let Some(lock) = LockedInstance::read(root, instance)? else {
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
         return Ok(Vec::new());
     };
     let mut libraries = Vec::new();
@@ -352,12 +351,12 @@ fn table_string(item: Option<&Item>) -> Option<String> {
 }
 
 pub(super) fn fetch_locked_assets(
-    root: &Path,
+    lock_path: &Path,
     instance: &str,
     cache_dir: &Path,
 ) -> Result<PathBuf, String> {
     let assets_dir = cache_dir.join("assets");
-    let Some(lock) = LockedInstance::read(root, instance)? else {
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
         return Ok(assets_dir);
     };
     if let Some(index_url) = lock.value("index_url") {

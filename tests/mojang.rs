@@ -103,6 +103,35 @@ fn spawn_mojang_http_server() -> String {
     base
 }
 
+fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
+    data_home
+        .join("modstage")
+        .join("instances")
+        .join(format!(
+            "{project_name}-{:08x}",
+            stable_hash(
+                &root
+                    .canonicalize()
+                    .expect("project root should canonicalize")
+                    .display()
+                    .to_string()
+            )
+        ))
+        .join(instance)
+        .join("modstage.lock")
+}
+
+fn stable_hash(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+
+    hash
+}
+
 #[test]
 fn resolve_fetches_and_records_mojang_version_metadata() {
     let project = temp_dir("mojang-project");
@@ -177,8 +206,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "mojang-test",
+        "vanilla-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[minecraft]",
@@ -337,8 +371,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "mojang-latest-test",
+        "vanilla-latest-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     assert!(
         lock.contains("[minecraft]")
             && lock.contains(&format!(
@@ -449,8 +488,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "mojang-default-test",
+        "vanilla-default-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     assert!(
         lock.contains(
             r#"manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json""#
@@ -554,8 +598,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "mojang-launch-test",
+        "vanilla-launch-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[launch]",
@@ -678,8 +727,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "mojang-assets-test",
+        "vanilla-assets-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[assets]",
