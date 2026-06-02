@@ -73,6 +73,35 @@ fn default_mojang_manifest(root: &Path) -> String {
     format!("file://{}", manifest.display())
 }
 
+fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
+    data_home
+        .join("modstage")
+        .join("instances")
+        .join(format!(
+            "{project_name}-{:08x}",
+            stable_hash(
+                &root
+                    .canonicalize()
+                    .expect("project root should canonicalize")
+                    .display()
+                    .to_string()
+            )
+        ))
+        .join(instance)
+        .join("modstage.lock")
+}
+
+fn stable_hash(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+
+    hash
+}
+
 #[test]
 fn resolve_records_fabric_loader_metadata() {
     let project = temp_dir("fabric-project");
@@ -138,8 +167,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "fabric-test",
+        "fabric-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[loader]",
@@ -260,8 +294,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "fabric-default-test",
+        "fabric-default-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     assert!(
         lock.contains(r#"kind = "fabric""#)
             && lock.contains(r#"version = "0.16.14""#)
@@ -403,8 +442,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "fabric-builtin-repo-test",
+        "fabric-builtin-repo-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     for expected in [
         r#"name = "net.fabricmc:fabric-loader:0.16.14""#,
         r#"name = "net.fabricmc:intermediary:26.1.2""#,
@@ -513,8 +557,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "fabric-classpath-test",
+        "fabric-classpath-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[[library]]",

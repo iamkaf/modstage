@@ -5,6 +5,7 @@ pub(super) struct LaunchRequest<'a> {
     pub(super) instance: &'a Instance,
     pub(super) side: &'a str,
     pub(super) root: &'a Path,
+    pub(super) lock_path: &'a Path,
     pub(super) game_dir: &'a Path,
     pub(super) run_dir: &'a Path,
     pub(super) artifact_url: &'a str,
@@ -17,6 +18,7 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
         instance,
         side,
         root,
+        lock_path,
         game_dir,
         run_dir,
         artifact_url,
@@ -26,11 +28,11 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     let cache_dir = dirs.cache.join("downloads").join("mojang");
     let artifact_name = format!("{side}.jar");
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
-    verify_locked_artifact_hash(root, &instance.name, side, &artifact)?;
-    let main_class = locked_main_class(root, &instance.name, side)?;
+    verify_locked_artifact_hash(lock_path, &instance.name, side, &artifact)?;
+    let main_class = locked_main_class(lock_path, &instance.name, side)?;
     let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
-    let java = selected_java(root, instance, options)?;
-    let installer_runtime = InstallerRuntime::new(config, instance, root, &dirs);
+    let java = selected_java(lock_path, instance, options)?;
+    let installer_runtime = InstallerRuntime::new(config, instance, root, lock_path, &dirs);
     let mut command = Command::new(&java);
     let mut launch_plan = LaunchPlanBuilder::new();
     let mut launch_artifact = artifact.clone();
@@ -45,7 +47,7 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
         if side == "server" {
             launch_artifact = loader_server_artifact(&artifact, &cache_dir)?;
         }
-        for arg in locked_arguments(root, &instance.name, "jvm")? {
+        for arg in locked_arguments(lock_path, &instance.name, "jvm")? {
             let arg = expand_launch_argument(&arg, &cache_dir, game_dir);
             launch_plan.arg(&mut command, arg);
         }
@@ -62,7 +64,7 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
             classpath.push(runtime);
         }
         classpath.extend(fetch_locked_libraries(
-            root,
+            lock_path,
             &instance.name,
             &cache_dir.join("libraries"),
             side,
@@ -73,7 +75,7 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
         let game_args = launch_game_arguments(
             instance,
             side,
-            locked_arguments(root, &instance.name, "game")?,
+            locked_arguments(lock_path, &instance.name, "game")?,
         )
         .into_iter()
         .map(|arg| expand_launch_argument(&arg, &cache_dir, game_dir))
@@ -109,12 +111,12 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
             launch_plan.arg(&mut command, "nogui");
         }
         if side == "client"
-            && let Some(asset_index) = locked_value(root, &instance.name, "id")?
+            && let Some(asset_index) = locked_value(lock_path, &instance.name, "id")?
         {
             launch_plan.arg_pair(&mut command, "--assetIndex", asset_index);
         }
-        if side == "client" && locked_value(root, &instance.name, "index_url")?.is_some() {
-            let assets_dir = fetch_locked_assets(root, &instance.name, &cache_dir)?;
+        if side == "client" && locked_value(lock_path, &instance.name, "index_url")?.is_some() {
+            let assets_dir = fetch_locked_assets(lock_path, &instance.name, &cache_dir)?;
             launch_plan.arg_pair(
                 &mut command,
                 "--assetsDir",
@@ -293,7 +295,7 @@ pub(super) fn print_run_summary(
 }
 
 pub(super) fn selected_java(
-    root: &Path,
+    lock_path: &Path,
     instance: &Instance,
     options: &RunOptions,
 ) -> Result<PathBuf, String> {
@@ -301,7 +303,7 @@ pub(super) fn selected_java(
         return Ok(java.clone());
     }
 
-    if let Some(major) = locked_java_major(root, &instance.name)?
+    if let Some(major) = locked_java_major(lock_path, &instance.name)?
         && let Some(java) = managed_java_for_major(major)?
     {
         return Ok(java);

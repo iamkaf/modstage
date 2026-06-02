@@ -136,6 +136,35 @@ fn default_mojang_manifest(root: &Path) -> String {
     format!("file://{}", manifest.display())
 }
 
+fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
+    data_home
+        .join("modstage")
+        .join("instances")
+        .join(format!(
+            "{project_name}-{:08x}",
+            stable_hash(
+                &root
+                    .canonicalize()
+                    .expect("project root should canonicalize")
+                    .display()
+                    .to_string()
+            )
+        ))
+        .join(instance)
+        .join("modstage.lock")
+}
+
+fn stable_hash(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+
+    hash
+}
+
 #[test]
 fn resolve_records_neoforge_loader_metadata() {
     let project = temp_dir("neoforge-project");
@@ -192,8 +221,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "neoforge-test",
+        "neoforge-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         "[loader]",
@@ -278,8 +312,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "neoforge-manifest-test",
+        "neoforge-latest-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     for expected in [
         "[loader]",
         r#"kind = "neoforge""#,
@@ -397,8 +436,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "neoforge-pinned-test",
+        "neoforge-pinned-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     for expected in [
         r#"kind = "neoforge""#,
         r#"version = "26.1.2.22-beta""#,
@@ -492,8 +536,13 @@ sides = ["client", "server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "neoforge-classpath-test",
+        "neoforge-classpath-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     assert!(
         !lock.contains(r#"name = "net.neoforged:neoforge:4.0.0""#),

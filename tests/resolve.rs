@@ -81,6 +81,35 @@ fn default_mojang_manifest(root: &Path) -> String {
     format!("file://{}", manifest.display())
 }
 
+fn state_lock_path(root: &Path, project_name: &str, instance: &str) -> PathBuf {
+    root.join(".modstage-test-data")
+        .join("modstage")
+        .join("instances")
+        .join(format!(
+            "{project_name}-{:08x}",
+            stable_hash(
+                &root
+                    .canonicalize()
+                    .expect("project root should canonicalize")
+                    .display()
+                    .to_string()
+            )
+        ))
+        .join(instance)
+        .join("modstage.lock")
+}
+
+fn stable_hash(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+
+    hash
+}
+
 #[test]
 fn resolve_writes_a_toml_lockfile_for_a_named_instance() {
     let project = temp_project("resolve");
@@ -93,7 +122,7 @@ fn resolve_writes_a_toml_lockfile_for_a_named_instance() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock_path = project.join("modstage.lock");
+    let lock_path = state_lock_path(&project, "resolve-test", "vanilla-26.1.2");
     let lock = fs::read_to_string(&lock_path).expect("modstage.lock should exist");
 
     for expected in [
@@ -180,12 +209,22 @@ sides = ["server"]
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let first = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-all-test",
+        "first-26.1.2",
+    ))
+    .expect("first instance lock should exist");
+    let second = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-all-test",
+        "second-26.1.2",
+    ))
+    .expect("second instance lock should exist");
     assert!(
-        lock.contains(r#"instance = "first-26.1.2""#)
-            && lock.contains(r#"instance = "second-26.1.2""#),
-        "resolve without an instance should lock every configured instance\n{lock}"
+        first.contains(r#"instance = "first-26.1.2""#)
+            && second.contains(r#"instance = "second-26.1.2""#),
+        "resolve without an instance should lock every configured instance\n{first}\n{second}"
     );
 
     let inspect = run_in(&["inspect", "lock", "second-26.1.2"], &project);
@@ -317,8 +356,12 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-mods",
+        "liteminer-fabric-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
 
     for expected in [
         r#"project = "resolve-mods""#,
@@ -369,8 +412,12 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-local-jar",
+        "local-jar-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     let jar_path = project.join("mods").join("example.jar");
 
     for expected in [
@@ -432,8 +479,12 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-maven-local",
+        "maven-local-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     let jar_path = artifact_dir.join("example-mod-1.0.0.jar");
 
     for expected in [
@@ -497,8 +548,12 @@ mods = [
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let lock =
-        fs::read_to_string(project.join("modstage.lock")).expect("modstage.lock should exist");
+    let lock = fs::read_to_string(state_lock_path(
+        &project,
+        "resolve-file-repo",
+        "file-repo-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
     let jar_path = artifact_dir.join("example-mod-1.0.0.jar");
 
     for expected in [
@@ -556,6 +611,49 @@ mods = [
     assert!(
         !project.join("modstage.lock").exists(),
         "failed resolution must not write a lockfile missing the configured mod"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove temp project");
+}
+
+#[test]
+fn resolve_all_does_not_write_partial_locks_when_a_later_instance_fails() {
+    let project = temp_project("resolve-partial-failure");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "resolve-partial-failure"
+
+[repositories]
+local = "file:///does/not/exist"
+
+[[instance]]
+name = "first-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+
+[[instance]]
+name = "second-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+mods = [
+  "maven:com.example:missing-mod:1.0.0",
+]
+"#,
+    )
+    .expect("failed to write config");
+
+    let output = run_in(&["resolve"], &project);
+    assert!(
+        !output.status.success(),
+        "resolve should fail when a later instance cannot resolve"
+    );
+    let first_lock = state_lock_path(&project, "resolve-partial-failure", "first-26.1.2");
+    assert!(
+        !first_lock.exists(),
+        "resolve should not write earlier instance locks after a later failure"
     );
 
     fs::remove_dir_all(project).expect("failed to remove temp project");

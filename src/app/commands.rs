@@ -16,18 +16,28 @@ pub(super) fn inspect_lock(
     explicit_config: Option<PathBuf>,
     instance: Option<&str>,
 ) -> Result<(), String> {
-    let project = ProjectContext::load_summary(explicit_config)?;
-    let lock_path = project.lock_path();
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-
-    if let Some(instance) = instance
-        && !lock.contains(&format!("instance = \"{instance}\""))
-    {
-        return Err(format!("lockfile does not contain instance `{instance}`"));
+    if let Some(instance) = instance {
+        let project = ProjectContext::load_summary(explicit_config)?;
+        let lock_path = project.lock_path(instance)?;
+        let lock = fs::read_to_string(&lock_path)
+            .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+        if !lock.contains(&format!("instance = \"{instance}\"")) {
+            return Err(format!("lockfile does not contain instance `{instance}`"));
+        }
+        print!("{lock}");
+        return Ok(());
     }
 
-    print!("{lock}");
+    let project = ProjectContext::load(explicit_config)?;
+    for instance in &project.config.instances {
+        let lock_path = project.lock_path(&instance.name)?;
+        let lock = fs::read_to_string(&lock_path)
+            .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
+        print!("{lock}");
+        if !lock.ends_with('\n') {
+            println!();
+        }
+    }
     Ok(())
 }
 

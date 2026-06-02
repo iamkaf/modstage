@@ -9,6 +9,7 @@ pub(super) struct InstallerRuntime<'a> {
     config: &'a Config,
     instance: &'a Instance,
     root: &'a Path,
+    lock_path: &'a Path,
     dirs: &'a StateDirs,
 }
 
@@ -17,12 +18,14 @@ impl<'a> InstallerRuntime<'a> {
         config: &'a Config,
         instance: &'a Instance,
         root: &'a Path,
+        lock_path: &'a Path,
         dirs: &'a StateDirs,
     ) -> Self {
         Self {
             config,
             instance,
             root,
+            lock_path,
             dirs,
         }
     }
@@ -36,6 +39,7 @@ impl<'a> InstallerRuntime<'a> {
             self.config,
             self.instance,
             self.root,
+            self.lock_path,
             self.dirs,
             game_dir,
             java,
@@ -52,6 +56,7 @@ impl<'a> InstallerRuntime<'a> {
             self.config,
             self.instance,
             self.root,
+            self.lock_path,
             self.dirs,
             game_dir,
             java,
@@ -60,14 +65,15 @@ impl<'a> InstallerRuntime<'a> {
     }
 
     pub(super) fn neoforge_client_runtime(&self) -> Result<Option<PathBuf>, String> {
-        neoforge_client_runtime(self.config, self.instance, self.root, self.dirs)
+        neoforge_client_runtime(self.config, self.instance, self.lock_path, self.dirs)
     }
 }
 
 pub(super) fn prepare_forge_client_artifact(
     config: &Config,
     instance: &Instance,
-    root: &Path,
+    _root: &Path,
+    lock_path: &Path,
     dirs: &StateDirs,
     game_dir: &Path,
     java: &Path,
@@ -77,7 +83,7 @@ pub(super) fn prepare_forge_client_artifact(
         return Ok(None);
     }
 
-    let Some(installer_maven) = locked_value(root, &instance.name, "installer_maven")? else {
+    let Some(installer_maven) = locked_value(lock_path, &instance.name, "installer_maven")? else {
         return Ok(None);
     };
     let coordinates = MavenCoordinates::parse_coordinate(&installer_maven)
@@ -201,13 +207,13 @@ pub(super) fn prepare_forge_client_artifact(
 pub(super) fn neoforge_client_runtime(
     config: &Config,
     instance: &Instance,
-    root: &Path,
+    lock_path: &Path,
     dirs: &StateDirs,
 ) -> Result<Option<PathBuf>, String> {
     if instance.loader != "neoforge" {
         return Ok(None);
     }
-    let Some(version) = neoforge_runtime_version(root, instance)? else {
+    let Some(version) = neoforge_runtime_version(lock_path, instance)? else {
         return Ok(None);
     };
     let coordinate = format!("net.neoforged:neoforge:{version}:universal");
@@ -223,9 +229,12 @@ pub(super) fn neoforge_client_runtime(
     .ok_or_else(|| format!("failed to resolve NeoForge runtime `{coordinate}`"))
 }
 
-fn neoforge_runtime_version(root: &Path, instance: &Instance) -> Result<Option<String>, String> {
+fn neoforge_runtime_version(
+    lock_path: &Path,
+    instance: &Instance,
+) -> Result<Option<String>, String> {
     Ok(
-        locked_table_value(root, &instance.name, "loader", "version")?
+        locked_table_value(lock_path, &instance.name, "loader", "version")?
             .filter(|version| version != "latest")
             .or_else(|| {
                 instance
@@ -239,7 +248,8 @@ fn neoforge_runtime_version(root: &Path, instance: &Instance) -> Result<Option<S
 pub(super) fn prepare_forge_server_launch(
     config: &Config,
     instance: &Instance,
-    root: &Path,
+    _root: &Path,
+    lock_path: &Path,
     dirs: &StateDirs,
     game_dir: &Path,
     java: &Path,
@@ -248,7 +258,7 @@ pub(super) fn prepare_forge_server_launch(
         return Ok(None);
     }
 
-    let Some(installer_maven) = locked_value(root, &instance.name, "installer_maven")? else {
+    let Some(installer_maven) = locked_value(lock_path, &instance.name, "installer_maven")? else {
         return Ok(None);
     };
     let coordinates = MavenCoordinates::parse_coordinate(&installer_maven)
@@ -504,8 +514,9 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&root).expect("failed to create temp root");
+        let lock_path = root.join("modstage.lock");
         fs::write(
-            root.join("modstage.lock"),
+            &lock_path,
             r#"[[instance]]
 instance = "neoforge-client"
 loader = "neoforge"
@@ -529,7 +540,7 @@ version = "26.1.2.66-beta"
         };
 
         assert_eq!(
-            neoforge_runtime_version(&root, &instance)
+            neoforge_runtime_version(&lock_path, &instance)
                 .expect("runtime version should resolve")
                 .as_deref(),
             Some("26.1.2.66-beta")

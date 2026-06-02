@@ -21,11 +21,12 @@ pub(super) fn resolve_instance(
             config.instances.iter().collect()
         }
     };
-    let lock_path = project.lock_path();
     let repositories = repositories_with_builtins(&config.repositories);
     let maven_cache = project.dirs.cache.join("downloads").join("maven");
-    let mut lock = LockfileWriter::new(&config.project_name, &config.repositories);
+    let mut locks = Vec::new();
     for instance in &instances {
+        let lock_path = project.lock_path(&instance.name)?;
+        let mut lock = LockfileWriter::new(&config.project_name, &config.repositories);
         resolve_instance_lock(
             &mut lock,
             config,
@@ -34,16 +35,30 @@ pub(super) fn resolve_instance(
             &repositories,
             &maven_cache,
         )?;
+        locks.push((lock_path, lock.finish()));
     }
-
-    fs::write(&lock_path, lock.finish())
-        .map_err(|error| format!("failed to write {}: {error}", lock_path.display()))?;
+    for (lock_path, contents) in locks {
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::write(&lock_path, contents)
+            .map_err(|error| format!("failed to write {}: {error}", lock_path.display()))?;
+    }
     let resolved = instances
         .iter()
         .map(|instance| instance.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    println!("resolved {resolved} into {}", lock_path.display());
+    println!(
+        "resolved {resolved} into {}",
+        project
+            .dirs
+            .data
+            .join("instances")
+            .join(&project.dirs.project_id)
+            .display()
+    );
 
     Ok(())
 }

@@ -87,14 +87,14 @@ It checks the failure modes that dev classpaths often hide:
 ```text
 modstage.toml
   -> resolve Mojang, loader, library, asset index, and mod metadata
-  -> write modstage.lock
+  -> write the per-instance state lock
   -> restore locked artifacts into cache
   -> reconcile durable instance state
   -> launch Java
   -> write logs, launch plan, crash reports, and run.toml
 ```
 
-`modstage.toml` is the file humans edit. `modstage.lock` is the generated launch graph.
+Edit `modstage.toml` to your preferences.
 
 ### Configuration
 
@@ -122,10 +122,10 @@ Use `modrinth:project:version` for a specific Modrinth version number or version
 | Command | Description |
 | --- | --- |
 | `modstage init` | Create a starter `modstage.toml` |
-| `modstage resolve [instance]` | Generate `modstage.lock` |
-| `modstage run <client\|server> <instance>` | Stage and launch one side of one instance |
+| `modstage resolve [instance]` | Generate per-instance state lockfiles without launching |
+| `modstage run <client\|server> <instance>` | Resolve if needed, then stage and launch one side of one instance |
 | `modstage inspect config` | Print config and state directories |
-| `modstage inspect lock [instance]` | Print the lockfile or one instance section |
+| `modstage inspect lock [instance]` | Print generated state lockfiles |
 | `modstage inspect instance <instance> [--side <client\|server>]` | Print staged files |
 | `modstage inspect run <run-id>` | Print a saved run report |
 | `modstage clean instance <instance> [--side <client\|server>]` | Remove durable staged state |
@@ -204,10 +204,15 @@ This section is for people changing Modstage itself.
 
 Keep user-facing behavior covered by integration tests under `tests/`. Runtime behavior should use bounded fake Java or bounded launcher runs so test jobs cannot hang.
 
-Automation should use locked, bounded runs:
+Automation can use normal bounded runs; Modstage resolves the selected instance before launching when needed:
 
 ```bash
-modstage resolve
+modstage run client example-fabric-26.1.2 --timeout 120s
+```
+
+Use `--locked` only when a pre-existing state lock is required and missing or stale locks should fail immediately:
+
+```bash
 modstage run client example-fabric-26.1.2 --locked --timeout 120s
 ```
 

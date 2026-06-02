@@ -59,9 +59,37 @@ impl ProjectContext {
             .ok_or_else(|| format!("unknown instance `{selected}`"))
     }
 
-    pub(super) fn lock_path(&self) -> PathBuf {
-        self.root.join("modstage.lock")
+    pub(super) fn instance_dir(&self, instance: &str) -> Result<PathBuf, String> {
+        validate_instance_path_token(instance)?;
+        Ok(self
+            .dirs
+            .data
+            .join("instances")
+            .join(&self.dirs.project_id)
+            .join(instance))
     }
+
+    pub(super) fn lock_path(&self, instance: &str) -> Result<PathBuf, String> {
+        Ok(self.instance_dir(instance)?.join("modstage.lock"))
+    }
+}
+
+fn validate_instance_path_token(instance: &str) -> Result<(), String> {
+    if instance.is_empty()
+        || instance.contains("..")
+        || instance.contains('/')
+        || instance.contains('\\')
+        || Path::new(instance).is_absolute()
+        || !instance
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(format!(
+            "invalid instance name `{instance}`; use only letters, numbers, '-', '_', and '.'"
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn project_config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
@@ -69,5 +97,67 @@ pub(super) fn project_config_path(explicit_config: Option<PathBuf>) -> Result<Pa
         Some(path) => Ok(path),
         None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?
             .ok_or_else(|| "no modstage.toml found; run `modstage init`".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_context() -> ProjectContext {
+        ProjectContext {
+            config_path: PathBuf::from("modstage.toml"),
+            root: PathBuf::from("/project"),
+            config: Config {
+                project_name: "test".to_string(),
+                repositories: Vec::new(),
+                instances: Vec::new(),
+            },
+            dirs: StateDirs {
+                project_id: "test-00000000".to_string(),
+                data: PathBuf::from("/state/modstage"),
+                cache: PathBuf::from("/cache/modstage"),
+            },
+        }
+    }
+
+    #[test]
+    fn lock_path_accepts_valid_instance_names() {
+        let project = project_context();
+
+        for instance in ["client", "server-1", "my_instance"] {
+            let path = project
+                .lock_path(instance)
+                .expect("valid instance name should produce a lock path");
+            assert!(
+                path.ends_with(Path::new(instance).join("modstage.lock")),
+                "lock path should end with the instance directory and lockfile: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn lock_path_rejects_traversal_instance_names() {
+        let project = project_context();
+
+        for instance in ["..", "../other", "safe/../other", "safe..other"] {
+            assert!(
+                project.lock_path(instance).is_err(),
+                "lock_path should reject traversal input {instance:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_path_rejects_absolute_and_separated_instance_names() {
+        let project = project_context();
+
+        for instance in ["/tmp/instance", "loader/server", r"loader\server"] {
+            assert!(
+                project.lock_path(instance).is_err(),
+                "lock_path should reject unsafe input {instance:?}"
+            );
+        }
     }
 }
