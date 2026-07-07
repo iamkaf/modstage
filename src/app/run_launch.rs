@@ -30,7 +30,6 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
     verify_locked_artifact_hash(lock_path, &instance.name, side, &artifact)?;
     let main_class = locked_main_class(lock_path, &instance.name, side)?;
-    let scenario = stage_scenario(root, run_dir, options.scenario.as_deref())?;
     let java = selected_java(lock_path, instance, options)?;
     let installer_runtime = InstallerRuntime::new(config, instance, root, lock_path, &dirs);
     let mut command = Command::new(&java);
@@ -129,21 +128,11 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     } else {
         launch_plan.arg_pair(&mut command, "-jar", artifact.display().to_string());
     }
-    if let Some(scenario) = &scenario {
-        command.env("MODSTAGE_RUN_DIR", run_dir);
-        command.env("MODSTAGE_ARTIFACT_DIR", run_dir.join("artifacts"));
-        launch_plan.arg_pair(
-            &mut command,
-            "--modstageScenario",
-            scenario.display().to_string(),
-        );
-    }
     let launch_plan_path = write_launch_plan(
         instance,
         side,
         &java,
         &launch_artifact,
-        scenario.as_deref(),
         run_dir,
         launch_plan.args(),
     )?;
@@ -187,7 +176,6 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
             status,
             java: &java,
             artifact: &artifact,
-            scenario: scenario.as_deref(),
             launch_plan: &launch_plan_path,
             exit_code,
             timed_out,

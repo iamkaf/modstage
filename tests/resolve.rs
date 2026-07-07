@@ -303,10 +303,10 @@ sides = ["data"]
 fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
     let project = temp_project("resolve-mods");
     let repo = project.join("repo");
-    let teakit_dir = repo
-        .join("dev")
-        .join("kaf")
-        .join("teakit-fabric")
+    let helper_dir = repo
+        .join("com")
+        .join("example")
+        .join("helper-fabric")
         .join("0.1.0");
     let liteminer_dir = repo
         .join("com")
@@ -314,10 +314,10 @@ fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
         .join("liteminer")
         .join("liteminer-fabric")
         .join("3.1.0+26.1.2");
-    fs::create_dir_all(&teakit_dir).expect("failed to create TeaKit artifact dir");
+    fs::create_dir_all(&helper_dir).expect("failed to create helper artifact dir");
     fs::create_dir_all(&liteminer_dir).expect("failed to create Liteminer artifact dir");
-    fs::write(teakit_dir.join("teakit-fabric-0.1.0.jar"), b"teakit")
-        .expect("failed to write TeaKit jar");
+    fs::write(helper_dir.join("helper-fabric-0.1.0.jar"), b"helper")
+        .expect("failed to write helper jar");
     fs::write(
         liteminer_dir.join("liteminer-fabric-3.1.0+26.1.2.jar"),
         b"liteminer",
@@ -339,7 +339,7 @@ minecraft = "26.1.2"
 loader = "vanilla"
 sides = ["client", "server"]
 mods = [
-  "maven:dev.kaf:teakit-fabric:0.1.0",
+  "maven:com.example:helper-fabric:0.1.0",
   "maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2",
 ]
 "#,
@@ -369,7 +369,7 @@ mods = [
         r#"loader = "vanilla""#,
         &format!(r#"kaf = "file://{}""#, repo.display()),
         r#"fabric = "https://maven.fabricmc.net""#,
-        r#""maven:dev.kaf:teakit-fabric:0.1.0""#,
+        r#""maven:com.example:helper-fabric:0.1.0""#,
         r#""maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2""#,
         r#"repository = "kaf""#,
     ] {

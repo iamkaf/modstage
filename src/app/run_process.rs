@@ -225,7 +225,7 @@ impl ProcessPolicy {
     fn should_finish_gracefully(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
         match self {
             Self::Server => matches!(event, ProcessEvent::ShutdownComplete) && sent_stop,
-            Self::Client => matches!(event, ProcessEvent::ClientReady),
+            Self::Client => false,
         }
     }
 }
@@ -237,7 +237,6 @@ enum ProcessStream {
 
 enum ProcessEvent {
     Ready,
-    ClientReady,
     ShutdownComplete,
 }
 
@@ -283,9 +282,6 @@ where
                 let text = String::from_utf8_lossy(&line);
                 if text.contains("Done (") && text.contains("For help, type") {
                     let _ = sender.send(ProcessEvent::Ready);
-                }
-                if text.contains("TeaKit listening on ") {
-                    let _ = sender.send(ProcessEvent::ClientReady);
                 }
                 if text.contains("Stopping server") || text.contains("Stopping the server") {
                     saw_stopping = true;

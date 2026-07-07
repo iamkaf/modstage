@@ -52,13 +52,6 @@ impl<'a> RunReport<'a> {
         report.string("java", final_report.java.display().to_string());
         report.string("artifact", final_report.artifact.display().to_string());
         report.string(
-            "scenario",
-            final_report
-                .scenario
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-        );
-        report.string(
             "launch_plan",
             final_report.launch_plan.display().to_string(),
         );
@@ -104,7 +97,6 @@ pub(super) struct FinalRunReport<'a> {
     pub(super) status: &'a str,
     pub(super) java: &'a Path,
     pub(super) artifact: &'a Path,
-    pub(super) scenario: Option<&'a Path>,
     pub(super) launch_plan: &'a Path,
     pub(super) exit_code: Option<i32>,
     pub(super) timed_out: bool,
@@ -165,7 +157,6 @@ pub(super) fn write_launch_plan(
     side: &str,
     java: &Path,
     artifact: &Path,
-    scenario: Option<&Path>,
     run_dir: &Path,
     args: &[String],
 ) -> Result<PathBuf, String> {
@@ -175,27 +166,12 @@ pub(super) fn write_launch_plan(
     plan.string("side", side);
     plan.string("java", java.display().to_string());
     plan.string("artifact", artifact.display().to_string());
-    plan.string(
-        "scenario",
-        scenario
-            .map(|path| path.display().to_string())
-            .unwrap_or_default(),
-    );
 
     for arg in args {
         plan.blank();
         plan.array_table("argument");
         plan.string("arg", arg);
     }
-
-    plan.blank();
-    plan.array_table("environment");
-    plan.string("name", "MODSTAGE_RUN_DIR");
-    plan.string("value", run_dir.display().to_string());
-    plan.blank();
-    plan.array_table("environment");
-    plan.string("name", "MODSTAGE_ARTIFACT_DIR");
-    plan.string("value", run_dir.join("artifacts").display().to_string());
 
     fs::write(&path, plan.finish())
         .map_err(|error| format!("failed to write launch plan {}: {error}", path.display()))?;
@@ -220,33 +196,6 @@ pub(super) fn collect_run_artifacts(
         minecraft_log,
         crash_report,
     })
-}
-
-pub(super) fn stage_scenario(
-    root: &Path,
-    run_dir: &Path,
-    scenario: Option<&Path>,
-) -> Result<Option<PathBuf>, String> {
-    let Some(scenario) = scenario else {
-        return Ok(None);
-    };
-
-    let source = if scenario.is_absolute() {
-        scenario.to_path_buf()
-    } else {
-        root.join(scenario)
-    };
-    if !source.is_file() {
-        return Err(format!("scenario {} does not exist", source.display()));
-    }
-
-    let destination = run_dir.join("scenario.toml");
-    fs::copy(&source, &destination)
-        .map_err(|error| format!("failed to stage scenario {}: {error}", source.display()))?;
-    fs::create_dir_all(run_dir.join("artifacts"))
-        .map_err(|error| format!("failed to create run artifact directory: {error}"))?;
-
-    Ok(Some(destination))
 }
 
 pub(super) fn copy_if_exists(source: &Path, destination: &Path) -> Result<Option<PathBuf>, String> {

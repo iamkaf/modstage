@@ -112,7 +112,6 @@ pub(super) fn run_instance(
 pub(super) struct RunOptions {
     pub(super) locked: bool,
     pub(super) java: Option<PathBuf>,
-    pub(super) scenario: Option<PathBuf>,
     pub(super) timeout: Option<String>,
 }
 
@@ -120,7 +119,6 @@ impl RunOptions {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut locked = false;
         let mut java = None;
-        let mut scenario = None;
         let mut timeout = None;
         let mut index = 0;
 
@@ -137,13 +135,6 @@ impl RunOptions {
                     java = Some(PathBuf::from(path));
                     index += 2;
                 }
-                "--scenario" => {
-                    let Some(path) = args.get(index + 1) else {
-                        return Err("--scenario requires a path".to_string());
-                    };
-                    scenario = Some(PathBuf::from(path));
-                    index += 2;
-                }
                 "--timeout" => {
                     let Some(value) = args.get(index + 1) else {
                         return Err("--timeout requires a duration".to_string());
@@ -158,7 +149,6 @@ impl RunOptions {
         Ok(Self {
             locked,
             java,
-            scenario,
             timeout,
         })
     }

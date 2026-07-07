@@ -1636,157 +1636,6 @@ sides = ["server"]
 
 #[test]
 #[cfg(unix)]
-fn run_server_stages_scenario_and_exposes_it_to_the_process() {
-    let project = temp_dir("run-scenario-project");
-    let metadata = temp_dir("run-scenario-metadata");
-    let data_home = temp_dir("run-scenario-data");
-    let cache_home = temp_dir("run-scenario-cache");
-    let server = metadata.join("server.jar");
-    let client = metadata.join("client.jar");
-    fs::write(&server, b"server").expect("failed to write server jar");
-    fs::write(&client, b"client").expect("failed to write client jar");
-    let version_json = metadata.join("26.1.2.json");
-    fs::write(
-        &version_json,
-        format!(
-            r#"{{
-  "id": "26.1.2",
-  "javaVersion": {{ "majorVersion": 25 }},
-  "downloads": {{
-    "client": {{ "url": "file://{}" }},
-    "server": {{ "url": "file://{}" }}
-  }}
-}}"#,
-            client.display(),
-            server.display()
-        ),
-    )
-    .expect("failed to write version json");
-    let manifest = metadata.join("version_manifest.json");
-    fs::write(
-        &manifest,
-        format!(
-            r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
-        ),
-    )
-    .expect("failed to write manifest");
-    let scenario = project.join("scenario.toml");
-    fs::write(&scenario, "name = \"smoke\"\n").expect("failed to write scenario");
-    let fake_java = metadata.join("fake-java-scenario");
-    fs::write(
-        &fake_java,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > java-args.txt\nprintf 'MODSTAGE_RUN_DIR=%s\\nMODSTAGE_ARTIFACT_DIR=%s\\n' \"$MODSTAGE_RUN_DIR\" \"$MODSTAGE_ARTIFACT_DIR\" > java-env.txt\nprintf 'scenario stdout\\n'\n",
-    )
-    .expect("failed to write fake java");
-    let mut permissions = fs::metadata(&fake_java)
-        .expect("fake java metadata should exist")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
-    fs::write(
-        project.join("modstage.toml"),
-        r#"[project]
-name = "run-scenario"
-
-[[instance]]
-name = "server-scenario-26.1.2"
-minecraft = "26.1.2"
-loader = "vanilla"
-sides = ["server"]
-"#,
-    )
-    .expect("failed to write config");
-
-    let manifest_url = format!("file://{}", manifest.display());
-    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
-    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
-    let resolve = run_in_with_string_env(
-        &["resolve", "server-scenario-26.1.2"],
-        &project,
-        &[
-            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
-        ],
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&resolve.stdout),
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
-    let scenario_str = scenario.to_str().expect("scenario path is not UTF-8");
-    let run = run_in_with_env(
-        &[
-            "run",
-            "server",
-            "server-scenario-26.1.2",
-            "--locked",
-            "--java",
-            fake_java_str,
-            "--scenario",
-            scenario_str,
-            "--timeout",
-            "5s",
-        ],
-        &project,
-        &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
-        ],
-    );
-    assert!(
-        run.status.success(),
-        "run should stage the scenario and launch\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-
-    let state_root = data_home.join("modstage").join("instances");
-    let game_dir = first_child(&state_root)
-        .join("server-scenario-26.1.2")
-        .join("server")
-        .join("game");
-    let java_args = fs::read_to_string(game_dir.join("java-args.txt"))
-        .expect("fake java should record scenario launch args");
-    assert!(
-        java_args.contains("--modstageScenario") && java_args.contains("scenario.toml"),
-        "scenario path should be passed as a stable launch arg\n{java_args}"
-    );
-    let java_env = fs::read_to_string(game_dir.join("java-env.txt"))
-        .expect("fake java should record scenario environment");
-    assert!(
-        java_env.contains("MODSTAGE_RUN_DIR=") && java_env.contains("MODSTAGE_ARTIFACT_DIR="),
-        "scenario run should expose Modstage run directories\n{java_env}"
-    );
-
-    let reports_root = data_home.join("modstage").join("runs");
-    let report_path = first_descendant_file(&reports_root, "run.toml");
-    let report_dir = report_path
-        .parent()
-        .expect("run report should have a parent");
-    assert_eq!(
-        fs::read_to_string(report_dir.join("scenario.toml"))
-            .expect("scenario should be copied into the run record"),
-        "name = \"smoke\"\n"
-    );
-    let report = fs::read_to_string(&report_path).expect("run report should be readable");
-    assert!(
-        report.contains("scenario = ") && report.contains("scenario.toml"),
-        "run report should reference the staged scenario\n{report}"
-    );
-
-    fs::remove_dir_all(project).expect("failed to remove project");
-    fs::remove_dir_all(metadata).expect("failed to remove metadata");
-    fs::remove_dir_all(data_home).expect("failed to remove data home");
-    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
-}
-
-#[test]
-#[cfg(unix)]
 fn locked_run_rejects_a_lockfile_for_a_different_instance() {
     let project = temp_dir("run-locked-wrong-instance-project");
     let metadata = temp_dir("run-locked-wrong-instance-metadata");
@@ -4637,7 +4486,7 @@ sides = ["server"]
 
 #[test]
 #[cfg(unix)]
-fn run_client_stops_successfully_after_teakit_ready_log() {
+fn run_client_does_not_stop_after_readiness_like_log() {
     let project = temp_dir("run-client-ready-project");
     let metadata = temp_dir("run-client-ready-metadata");
     let data_home = temp_dir("run-client-ready-data");
@@ -4646,7 +4495,7 @@ fn run_client_stops_successfully_after_teakit_ready_log() {
     let fake_java = metadata.join("fake-java-client-ready");
     fs::write(
         &fake_java,
-        "#!/bin/sh\nprintf 'TeaKit listening on http://127.0.0.1:48435\\n'\nexec sleep 30\n",
+        "#!/bin/sh\nprintf 'Control endpoint listening on http://127.0.0.1:48435\\n'\nexec sleep 30\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)
@@ -4695,7 +4544,7 @@ sides = ["client"]
             "--java",
             fake_java_str,
             "--timeout",
-            "2s",
+            "250ms",
         ],
         &project,
         &[
@@ -4704,19 +4553,24 @@ sides = ["client"]
         ],
     );
     assert!(
-        run.status.success(),
-        "client run should pass after TeaKit reports readiness\nstdout:\n{}\nstderr:\n{}",
+        !run.status.success(),
+        "client run should follow normal timeout behavior after readiness logs\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("client run timed out"),
+        "client run should report a timeout\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 
     let report_path = first_descendant_file(&data_home.join("modstage").join("runs"), "run.toml");
     let report = fs::read_to_string(report_path).expect("run report should be readable");
     assert!(
-        report.contains(r#"status = "passed""#)
-            && report.contains("timed_out = false")
-            && report.contains(r#"failure_class = "none""#),
-        "client readiness run should be reported as a pass\n{report}"
+        report.contains(r#"status = "timed_out""#)
+            && report.contains("timed_out = true")
+            && report.contains(r#"failure_class = "timeout""#),
+        "client readiness log should not be reported as a pass\n{report}"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");

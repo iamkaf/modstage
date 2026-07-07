@@ -153,7 +153,7 @@ Project state is scoped by project name plus a hash of the config root. Two proj
 
 ### Client Runs
 
-Client runs launch the real graphical Minecraft client. When TeaKit is installed, Modstage treats the TeaKit readiness log as the bounded success point and stops the process.
+Client runs launch the real graphical Minecraft client and follow normal process exit or timeout behavior.
 
 ### Server Runs
 
@@ -170,7 +170,7 @@ Every run writes a report directory under the project run root.
 | File | Contents |
 | --- | --- |
 | `run.toml` | Instance, side, status, Java path, artifact path, timeout, exit code, and failure class |
-| `launch-plan.toml` | Java command arguments and Modstage environment |
+| `launch-plan.toml` | Java command arguments |
 | `stdout.log` | Raw process stdout |
 | `stderr.log` | Raw process stderr |
 | `minecraft-latest.log` | Copied Minecraft log when present |
