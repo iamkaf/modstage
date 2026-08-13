@@ -75,8 +75,12 @@ pub(super) fn run_process_with_timeout(
 pub(super) fn run_server_process_with_timeout(
     command: &mut Command,
     timeout: Option<Duration>,
+    keep_alive: bool,
 ) -> Result<TimedOutput, String> {
-    ProcessSupervisor::new(ProcessPolicy::Server).run(command, timeout)
+    ProcessSupervisor::new(ProcessPolicy::Server {
+        stop_on_ready: !keep_alive,
+    })
+    .run(command, timeout)
 }
 
 pub(super) fn run_client_process_with_timeout(
@@ -96,7 +100,7 @@ impl ProcessSupervisor {
     }
 
     fn run(&self, command: &mut Command, timeout: Option<Duration>) -> Result<TimedOutput, String> {
-        if matches!(self.policy, ProcessPolicy::Server) {
+        if matches!(self.policy, ProcessPolicy::Server { .. }) {
             command.stdin(Stdio::piped());
         }
 
@@ -213,19 +217,25 @@ impl ProcessSupervisor {
 }
 
 enum ProcessPolicy {
-    Server,
+    Server { stop_on_ready: bool },
     Client,
 }
 
 impl ProcessPolicy {
     fn should_send_stop(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
-        matches!(self, Self::Server) && matches!(event, ProcessEvent::Ready) && !sent_stop
+        matches!(
+            self,
+            Self::Server {
+                stop_on_ready: true
+            }
+        ) && matches!(event, ProcessEvent::Ready)
+            && !sent_stop
     }
 
     fn should_finish_gracefully(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
         match self {
-            Self::Server => matches!(event, ProcessEvent::ShutdownComplete) && sent_stop,
-            Self::Client => false,
+            Self::Server { .. } => matches!(event, ProcessEvent::ShutdownComplete) && sent_stop,
+            Self::Client => matches!(event, ProcessEvent::ClientShutdownComplete),
         }
     }
 }
@@ -238,6 +248,7 @@ enum ProcessStream {
 enum ProcessEvent {
     Ready,
     ShutdownComplete,
+    ClientShutdownComplete,
 }
 
 fn spawn_process_reader<R>(
@@ -289,6 +300,9 @@ where
                 if saw_stopping && text.contains("All dimensions are saved") {
                     let _ = sender.send(ProcessEvent::ShutdownComplete);
                 }
+                if text.contains("Render thread/INFO") && text.contains("Stopping!") {
+                    let _ = sender.send(ProcessEvent::ClientShutdownComplete);
+                }
             }
         }
     })
@@ -317,4 +331,40 @@ pub(super) fn parse_duration(value: &str) -> Result<Duration, String> {
     }
 
     Err(format!("timeout `{value}` must use `ms` or `s`"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn keep_alive_server_is_not_stopped_at_readiness() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            "printf 'Done (0.123s)! For help, type \"help\"\\n'; while IFS= read -r line; do exit 42; done; sleep 5",
+        );
+
+        let output =
+            run_server_process_with_timeout(&mut command, Some(Duration::from_millis(100)), true)
+                .expect("keep-alive server should remain supervised");
+
+        assert!(output.timed_out);
+        assert!(!output.graceful_stop);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn client_supervision_finishes_after_minecraft_reports_shutdown() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("printf '[Render thread/INFO]: Stopping!\\n'; sleep 30");
+
+        let output = run_client_process_with_timeout(&mut command, Some(Duration::from_secs(5)))
+            .expect("client shutdown should remain supervised");
+
+        assert!(!output.timed_out);
+        assert!(output.graceful_stop);
+    }
 }

@@ -140,7 +140,7 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     let timeout = options.timeout_duration()?;
     let run_started = SystemTime::now();
     let output = if side == "server" {
-        run_server_process_with_timeout(&mut command, timeout)
+        run_server_process_with_timeout(&mut command, timeout, options.keep_alive)
     } else if side == "client" {
         run_client_process_with_timeout(&mut command, timeout)
     } else {

@@ -13,6 +13,8 @@ pub(super) struct Instance {
     pub(super) loader: String,
     pub(super) loader_version: Option<String>,
     pub(super) sides: Vec<String>,
+    pub(super) modrinth_pack: Option<String>,
+    pub(super) server_properties: Vec<(String, String)>,
     pub(super) mods: Vec<String>,
     pub(super) fixtures: Vec<Fixture>,
 }
@@ -57,6 +59,31 @@ impl Config {
                 if !is_supported_side(side) {
                     return Err(format!(
                         "instance `{}` uses unsupported side `{side}`; supported sides: client, server",
+                        instance.name
+                    ));
+                }
+            }
+            if let Some(pack) = &instance.modrinth_pack
+                && modrinth_source(pack).is_none()
+            {
+                return Err(format!(
+                    "instance `{}` has invalid modrinth_pack `{pack}`; expected modrinth:project[:version]",
+                    instance.name
+                ));
+            }
+            for (key, value) in &instance.server_properties {
+                if key.is_empty()
+                    || key.contains(['=', ':', '\n', '\r'])
+                    || key.chars().any(char::is_whitespace)
+                {
+                    return Err(format!(
+                        "instance `{}` has invalid server property key `{key}`",
+                        instance.name
+                    ));
+                }
+                if value.contains(['\n', '\r']) {
+                    return Err(format!(
+                        "instance `{}` has a multiline value for server property `{key}`",
                         instance.name
                     ));
                 }
@@ -113,6 +140,8 @@ fn instances_from_document(document: &DocumentMut) -> Vec<Instance> {
                     loader: table_string(table.get("loader")).unwrap_or_default(),
                     loader_version: table_string(table.get("loader_version")),
                     sides: table_string_array(table.get("sides")),
+                    modrinth_pack: table_string(table.get("modrinth_pack")),
+                    server_properties: table_inline_string_map(table.get("server_properties")),
                     mods: table_string_array(table.get("mods")),
                     fixtures: table
                         .get("fixture")
@@ -152,6 +181,24 @@ fn table_string_array(item: Option<&Item>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn table_inline_string_map(item: Option<&Item>) -> Vec<(String, String)> {
+    let mut values = item
+        .and_then(Item::as_inline_table)
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (key.to_string(), value.to_string()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    values
 }
 
 pub(super) fn is_supported_loader(loader: &str) -> bool {
@@ -263,25 +310,6 @@ impl<'a> MavenCoordinates<'a> {
             .unwrap_or_default();
         format!("{}-{}{}.jar", self.artifact, self.version, classifier)
     }
-}
-
-pub(super) fn maven_artifact(
-    repositories: &[(String, String)],
-    coordinates: &MavenCoordinates<'_>,
-) -> Option<(String, PathBuf)> {
-    for (name, url) in repositories {
-        if url == "mavenLocal" {
-            if let Some(path) = maven_local_artifact(coordinates) {
-                return Some((name.clone(), path));
-            }
-        } else if let Some(root) = url.strip_prefix("file://")
-            && let Some(path) = maven_artifact_under(PathBuf::from(root), coordinates)
-        {
-            return Some((name.clone(), path));
-        }
-    }
-
-    maven_local_artifact(coordinates).map(|path| ("mavenLocal".to_string(), path))
 }
 
 pub(super) fn maven_local_artifact(coordinates: &MavenCoordinates<'_>) -> Option<PathBuf> {

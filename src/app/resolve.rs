@@ -71,6 +71,7 @@ pub(super) fn resolve_instance_lock(
     repositories: &[(String, String)],
     maven_cache: &Path,
 ) -> Result<(), String> {
+    let mut pack_projects = std::collections::HashSet::new();
     lock.begin_instance(instance);
     let metadata = resolve_minecraft_metadata(config, instance, config_root)?;
     if let Some(metadata) = metadata {
@@ -146,6 +147,20 @@ pub(super) fn resolve_instance_lock(
         }
     }
     lock.mods(&instance.mods);
+    if let Some(pack_source) = &instance.modrinth_pack {
+        let source = modrinth_source(pack_source)
+            .ok_or_else(|| format!("invalid Modrinth pack source `{pack_source}`"))?;
+        let pack = resolve_modrinth_pack(config, instance, config_root, &source)?;
+        pack_projects.extend(pack.files.iter().filter_map(|file| {
+            let url = file.url.as_deref()?;
+            url.split("/data/")
+                .nth(1)
+                .and_then(|tail| tail.split('/').next())
+                .filter(|project| !project.is_empty())
+                .map(str::to_string)
+        }));
+        lock.modrinth_pack(pack);
+    }
     let resolved_mods = instance
         .mods
         .par_iter()
@@ -157,6 +172,7 @@ pub(super) fn resolve_instance_lock(
                 repositories,
                 maven_cache,
                 source,
+                &pack_projects,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -208,26 +224,28 @@ fn resolve_mod_source(
     repositories: &[(String, String)],
     maven_cache: &Path,
     source: &str,
-) -> Result<Option<ResolvedMod>, String> {
+    pack_projects: &std::collections::HashSet<String>,
+) -> Result<Vec<ResolvedMod>, String> {
     if let Some(path) = local_mod_path(config_root, source) {
         let path = path
             .canonicalize()
             .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()))?;
         let bytes = fs::read(&path)
             .map_err(|error| format!("failed to read local mod {}: {error}", path.display()))?;
-        return Ok(Some(ResolvedMod::Local {
+        return Ok(vec![ResolvedMod::Local {
             source: source.to_string(),
             path,
             sha256: sha256_hex(&bytes),
-        }));
+        }]);
     }
 
     if let Some(modrinth) = modrinth_source(source) {
-        let resolved = resolve_modrinth_mod(config, instance, config_root, &modrinth)?;
-        return Ok(Some(ResolvedMod::Modrinth {
-            source: source.to_string(),
-            resolved,
-        }));
+        return resolve_modrinth_mod_tree(config, instance, config_root, &modrinth, pack_projects)
+            .map(|mods| {
+                mods.into_iter()
+                    .map(|(source, resolved)| ResolvedMod::Modrinth { source, resolved })
+                    .collect()
+            });
     }
 
     if let Some(coordinates) = MavenCoordinates::parse(source) {
@@ -247,16 +265,16 @@ fn resolve_mod_source(
         let bytes = fs::read(&path).map_err(|error| {
             format!("failed to read Maven artifact {}: {error}", path.display())
         })?;
-        return Ok(Some(ResolvedMod::Maven {
+        return Ok(vec![ResolvedMod::Maven {
             source: source.to_string(),
             repository: artifact.repository,
             url: artifact.url,
             path,
             sha256: sha256_hex(&bytes),
-        }));
+        }]);
     }
 
-    Ok(None)
+    Ok(Vec::new())
 }
 
 pub(super) fn resolved_maven_library_with_side(

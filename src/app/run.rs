@@ -48,10 +48,13 @@ pub(super) fn run_instance(
 
     fs::create_dir_all(&mods_dir)
         .map_err(|error| format!("failed to create {}: {error}", mods_dir.display()))?;
-    reconcile_mods(&project.root, &lock_path, instance, &mods_dir, &mod_cache)?;
+    clear_mods(&mods_dir)?;
+    reconcile_pack_files(&lock_path, instance, side, &game_dir, &mod_cache)?;
+    reconcile_mods(&lock_path, instance, &project.root, &mods_dir, &mod_cache)?;
     apply_fixtures(&project.root, side, instance, &game_dir)?;
 
     if side == "server" {
+        apply_server_properties(instance, &game_dir)?;
         fs::write(game_dir.join("eula.txt"), "eula=true\n")
             .map_err(|error| format!("failed to write server eula.txt: {error}"))?;
     }
@@ -111,6 +114,7 @@ pub(super) fn run_instance(
 
 pub(super) struct RunOptions {
     pub(super) locked: bool,
+    pub(super) keep_alive: bool,
     pub(super) java: Option<PathBuf>,
     pub(super) timeout: Option<String>,
 }
@@ -118,6 +122,7 @@ pub(super) struct RunOptions {
 impl RunOptions {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut locked = false;
+        let mut keep_alive = false;
         let mut java = None;
         let mut timeout = None;
         let mut index = 0;
@@ -126,6 +131,10 @@ impl RunOptions {
             match args[index].as_str() {
                 "--locked" => {
                     locked = true;
+                    index += 1;
+                }
+                "--keep-alive" => {
+                    keep_alive = true;
                     index += 1;
                 }
                 "--java" => {
@@ -148,6 +157,7 @@ impl RunOptions {
 
         Ok(Self {
             locked,
+            keep_alive,
             java,
             timeout,
         })

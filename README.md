@@ -108,11 +108,32 @@ The starter config above is enough for a normal Fabric client/server check. Add 
 | `loader` | `vanilla`, `fabric`, `forge`, or `neoforge` |
 | `loader_version` | Exact loader version, or `latest` to resolve the newest loader for `minecraft` |
 | `sides` | `client`, `server`, or both |
+| `modrinth_pack` | Optional pinned Modrinth `.mrpack` source, including side rules and overrides |
 | `mods` | Modrinth ids, Maven single-jar coordinates, or local jars |
+| `server_properties` | Optional inline table of deliberate server-only property overrides |
 
 Repository fallback is normal ordered Maven fallback. The first repository that contains an artifact wins.
 
 Use `modrinth:project:version` for a specific Modrinth version number or version id. Use `modrinth:project:latest`, or omit the version, to resolve the newest Modrinth version matching the instance loader and Minecraft version.
+
+Set `modrinth_pack = "modrinth:cobbleverse:1.7.42"` on an instance to use a
+published pack as its base. Modstage validates the pack's Minecraft and loader
+versions, stages required and optional files according to their client/server
+environment, applies common and side-specific overrides, and records every
+resolved path and SHA-256 in the lock. Entries in `mods` are then layered on top
+for the mod under test and any deliberate additions. Required Modrinth
+dependencies are resolved recursively; dependencies already supplied by the
+pack are deduplicated.
+
+Local production reproductions commonly need an offline test identity. Express
+that deviation in the instance instead of editing staged state:
+
+```toml
+server_properties = { online-mode = "false", enforce-secure-profile = "false" }
+```
+
+Modstage applies these values after pack overrides and fixtures and records them
+in the instance lock.
 
 `latest` metadata is cached briefly, then refreshed. Lockfiles keep the exact resolved versions.
 
@@ -158,6 +179,11 @@ Client runs launch the real graphical Minecraft client and follow normal process
 ### Server Runs
 
 Server runs watch for the standard Minecraft ready line, send `stop`, and accept confirmed shutdown as a pass. Server instances write `eula.txt=true` automatically.
+
+An external test orchestrator can pass `--keep-alive` to retain ownership after
+readiness. The run remains bounded by `--timeout` and still captures the normal
+Modstage report; the orchestrator is responsible for requesting graceful
+shutdown before that deadline.
 
 ### Forge And NeoForge
 

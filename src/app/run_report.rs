@@ -113,7 +113,6 @@ pub(super) fn classify_failure(
     if timed_out {
         return Ok("timeout");
     }
-
     if artifacts.crash_report.is_some() {
         return Ok("crash_report");
     }
@@ -131,12 +130,13 @@ pub(super) fn classify_failure(
         {
             return Ok("mixin");
         }
-        if lower.contains("missing") && lower.contains("depend") {
+        if !success && lower.contains("missing") && lower.contains("depend") {
             return Ok("missing_dependency");
         }
-        if lower
-            .lines()
-            .any(|line| line.contains("failed to load") && line.contains("resource"))
+        if !success
+            && lower
+                .lines()
+                .any(|line| line.contains("failed to load") && line.contains("resource"))
         {
             return Ok("resource_load");
         }
@@ -251,4 +251,31 @@ pub(super) fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf
     fs::copy(source, &destination)
         .map_err(|error| format!("failed to copy crash report {}: {error}", source.display()))?;
     Ok(destination)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_process_is_not_failed_by_incidental_log_language() {
+        let log = env::temp_dir().join(format!(
+            "modstage-success-log-classification-{}",
+            std::process::id()
+        ));
+        fs::write(&log, "Optional integration has a missing dependency\n")
+            .expect("failed to write classification fixture");
+        let artifacts = RunArtifacts {
+            minecraft_log: Some(log.clone()),
+            crash_report: None,
+        };
+
+        assert_eq!(classify_failure(true, false, &artifacts).unwrap(), "none");
+        assert_eq!(
+            classify_failure(false, false, &artifacts).unwrap(),
+            "missing_dependency"
+        );
+
+        fs::remove_file(log).expect("failed to remove classification fixture");
+    }
 }

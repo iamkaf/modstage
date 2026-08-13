@@ -1,7 +1,10 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
@@ -100,6 +103,209 @@ fn stable_hash(value: &str) -> u32 {
     }
 
     hash
+}
+
+fn write_pack(path: &Path, index: &str, entries: &[(&str, &[u8])]) {
+    let file = fs::File::create(path).expect("failed to create test mrpack");
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    archive
+        .start_file("modrinth.index.json", options)
+        .expect("failed to start pack index");
+    archive
+        .write_all(index.as_bytes())
+        .expect("failed to write pack index");
+    for (name, contents) in entries {
+        archive
+            .start_file(*name, options)
+            .expect("failed to start pack override");
+        archive
+            .write_all(contents)
+            .expect("failed to write pack override");
+    }
+    archive.finish().expect("failed to finish test mrpack");
+}
+
+#[test]
+fn modrinth_pack_resolve_and_stage_preserve_sides_overrides_and_locked_restoration() {
+    let project = temp_dir("modrinth-pack-project");
+    let metadata = temp_dir("modrinth-pack-metadata");
+    let data_home = temp_dir("modrinth-pack-data");
+    let cache_home = temp_dir("modrinth-pack-cache");
+    let common = metadata.join("common.jar");
+    let client = metadata.join("client.jar");
+    let server = metadata.join("server.jar");
+    fs::write(&common, b"common").expect("failed to write common mod");
+    fs::write(&client, b"client").expect("failed to write client mod");
+    fs::write(&server, b"server").expect("failed to write server mod");
+    let pack = metadata.join("sample-pack.mrpack");
+    let index = format!(
+        r#"{{
+  "formatVersion": 1,
+  "game": "minecraft",
+  "versionId": "pack-index-1",
+  "name": "Sample Pack",
+  "summary": "test",
+  "files": [
+    {{
+      "path": "mods/common.jar",
+      "hashes": {{"sha1": "common"}},
+      "env": {{"client": "required", "server": "required"}},
+      "downloads": ["file://{}"],
+      "fileSize": 6
+    }},
+    {{
+      "path": "mods/client.jar",
+      "hashes": {{"sha1": "client"}},
+      "env": {{"client": "required", "server": "unsupported"}},
+      "downloads": ["file://{}"],
+      "fileSize": 6
+    }},
+    {{
+      "path": "mods/server.jar",
+      "hashes": {{"sha1": "server"}},
+      "env": {{"client": "unsupported", "server": "required"}},
+      "downloads": ["file://{}"],
+      "fileSize": 6
+    }}
+  ],
+  "dependencies": {{"minecraft": "26.1.2"}}
+}}"#,
+        common.display(),
+        client.display(),
+        server.display()
+    );
+    write_pack(
+        &pack,
+        &index,
+        &[
+            ("overrides/config/common.toml", b"common=true"),
+            ("client-overrides/options.txt", b"client-option"),
+            ("server-overrides/server.properties", b"server-option"),
+        ],
+    );
+    let versions = metadata.join("sample-pack-versions.json");
+    fs::write(
+        &versions,
+        format!(
+            r#"[{{
+  "id": "sample-pack-version",
+  "version_number": "1.0.0",
+  "files": [{{
+    "primary": true,
+    "filename": "sample-pack.mrpack",
+    "url": "file://{}",
+    "hashes": {{"sha1": "pack"}}
+  }}]
+}}]"#,
+            pack.display()
+        ),
+    )
+    .expect("failed to write pack metadata");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "modrinth-pack-test"
+
+[[instance]]
+name = "pack-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["client", "server"]
+modrinth_pack = "modrinth:sample-pack:1.0.0"
+"#,
+    )
+    .expect("failed to write config");
+    let versions_url = format!("file://{}", versions.display());
+    let envs = [
+        (
+            "MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL",
+            versions_url.as_str(),
+        ),
+        (
+            "XDG_DATA_HOME",
+            data_home.to_str().expect("data path is not UTF-8"),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            cache_home.to_str().expect("cache path is not UTF-8"),
+        ),
+    ];
+
+    let resolve = run_in_with_env(&["resolve", "pack-26.1.2"], &project, &envs);
+    assert!(
+        resolve.status.success(),
+        "pack resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    let lock_path = state_lock_path(&data_home, &project, "modrinth-pack-test", "pack-26.1.2");
+    let lock = fs::read_to_string(&lock_path).expect("pack lock should exist");
+    for expected in [
+        "[pack]",
+        r#"source = "modrinth:sample-pack:1.0.0""#,
+        r#"version_id = "sample-pack-version""#,
+        r#"index_version = "pack-index-1""#,
+        "[[pack_file]]",
+        r#"destination = "config/common.toml""#,
+        r#"archive_entry = "overrides/config/common.toml""#,
+    ] {
+        assert!(
+            lock.contains(expected),
+            "lock should contain {expected:?}\n{lock}"
+        );
+    }
+
+    let _ = run_in_with_env(
+        &["run", "client", "pack-26.1.2", "--locked"],
+        &project,
+        &envs,
+    );
+    let _ = run_in_with_env(
+        &["run", "server", "pack-26.1.2", "--locked"],
+        &project,
+        &envs,
+    );
+    let instance_root = lock_path.parent().expect("lock should have a parent");
+    let client_game = instance_root.join("client/game");
+    let server_game = instance_root.join("server/game");
+    assert!(client_game.join("mods/common.jar").is_file());
+    assert!(client_game.join("mods/client.jar").is_file());
+    assert!(!client_game.join("mods/server.jar").exists());
+    assert!(server_game.join("mods/common.jar").is_file());
+    assert!(!server_game.join("mods/client.jar").exists());
+    assert!(server_game.join("mods/server.jar").is_file());
+    assert_eq!(
+        fs::read_to_string(client_game.join("config/common.toml")).unwrap(),
+        "common=true"
+    );
+    assert_eq!(
+        fs::read_to_string(client_game.join("options.txt")).unwrap(),
+        "client-option"
+    );
+    assert_eq!(
+        fs::read_to_string(server_game.join("server.properties")).unwrap(),
+        "server-option"
+    );
+
+    fs::remove_dir_all(cache_home.join("modstage")).expect("failed to clear pack cache");
+    fs::remove_file(client_game.join("config/common.toml"))
+        .expect("failed to remove staged override");
+    let _ = run_in_with_env(
+        &["run", "client", "pack-26.1.2", "--locked"],
+        &project,
+        &envs,
+    );
+    assert_eq!(
+        fs::read_to_string(client_game.join("config/common.toml")).unwrap(),
+        "common=true",
+        "locked staging should restore an embedded override from the pack archive"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
 
 #[test]

@@ -1,5 +1,7 @@
 use super::*;
+use std::io::Read;
 use toml_edit::{DocumentMut, Item, Table};
+use zip::ZipArchive;
 
 pub(super) struct LockedInstance {
     header: String,
@@ -99,9 +101,9 @@ pub(super) fn verify_locked_mod_hashes(
     instance: &Instance,
     cache_dir: &Path,
 ) -> Result<(), String> {
-    for source in &instance.mods {
+    for source in locked_mod_sources(lock_path, &instance.name)? {
         let Some((path, expected)) =
-            restore_locked_mod_path_and_hash(lock_path, &instance.name, source, cache_dir)?
+            restore_locked_mod_path_and_hash(lock_path, &instance.name, &source, cache_dir)?
         else {
             continue;
         };
@@ -116,6 +118,174 @@ pub(super) fn verify_locked_mod_hashes(
     }
 
     Ok(())
+}
+
+pub(super) fn locked_mod_sources(lock_path: &Path, instance: &str) -> Result<Vec<String>, String> {
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
+        return Ok(Vec::new());
+    };
+    Ok(lock
+        .array_tables("mod")
+        .into_iter()
+        .flatten()
+        .filter_map(|block| table_string(block.get("source")))
+        .collect())
+}
+
+pub(super) struct LockedPackFile {
+    pub(super) destination: PathBuf,
+    pub(super) path: PathBuf,
+}
+
+pub(super) fn restore_locked_pack_files(
+    lock_path: &Path,
+    instance: &str,
+    side: &str,
+    cache_dir: &Path,
+) -> Result<Vec<LockedPackFile>, String> {
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
+        return Ok(Vec::new());
+    };
+    let mut files = Vec::new();
+    for block in lock.array_tables("pack_file").into_iter().flatten() {
+        let sides = block
+            .get("sides")
+            .and_then(Item::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .any(|value| value == side)
+            })
+            .unwrap_or(false);
+        if !sides {
+            continue;
+        }
+        let destination = table_string(block.get("destination"))
+            .ok_or_else(|| "locked pack file is missing destination".to_string())?;
+        let destination = safe_pack_destination(&destination)?;
+        let expected = table_string(block.get("sha256"))
+            .ok_or_else(|| "locked pack file is missing sha256".to_string())?;
+        let path = restore_pack_file(&lock, block, &destination, &expected, cache_dir)?;
+        files.push(LockedPackFile { destination, path });
+    }
+    Ok(files)
+}
+
+fn restore_pack_file(
+    lock: &LockedInstance,
+    block: &Table,
+    destination: &Path,
+    expected: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let locked_path = table_string(block.get("path"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "locked pack file is missing path".to_string())?;
+    let path = if locked_path.is_file() {
+        locked_path
+    } else if let Some(url) = table_string(block.get("url")) {
+        let file_name = destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                format!(
+                    "pack destination has no filename: {}",
+                    destination.display()
+                )
+            })?;
+        fetch_to_cache(&url, &cache_dir.join(expected), file_name)?
+    } else if let Some(entry) = table_string(block.get("archive_entry")) {
+        restore_pack_override(lock, &entry, destination, expected, cache_dir)?
+    } else {
+        return Err(format!(
+            "locked pack file {} is missing and has no restoration source",
+            destination.display()
+        ));
+    };
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "failed to read locked pack file {}: {error}",
+            path.display()
+        )
+    })?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "locked pack file `{}` hash mismatch: expected {expected}, got {actual}",
+            destination.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn restore_pack_override(
+    lock: &LockedInstance,
+    entry: &str,
+    destination: &Path,
+    expected: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let archive_url = lock
+        .table_value("pack", "archive_url")
+        .ok_or_else(|| "locked Modrinth pack is missing archive_url".to_string())?;
+    let locked_archive = lock
+        .table_value("pack", "archive_path")
+        .map(PathBuf::from)
+        .ok_or_else(|| "locked Modrinth pack is missing archive_path".to_string())?;
+    let archive_name = locked_archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pack.mrpack");
+    let archive = if locked_archive.is_file() {
+        locked_archive
+    } else {
+        fetch_to_cache(&archive_url, &cache_dir.join("archive"), archive_name)?
+    };
+    if let Some(expected_archive) = lock.table_value("pack", "archive_sha256") {
+        let bytes = fs::read(&archive).map_err(|error| {
+            format!("failed to read pack archive {}: {error}", archive.display())
+        })?;
+        let actual = sha256_hex(&bytes);
+        if actual != expected_archive {
+            return Err(format!(
+                "locked Modrinth pack hash mismatch: expected {expected_archive}, got {actual}"
+            ));
+        }
+    }
+    let file = fs::File::open(&archive)
+        .map_err(|error| format!("failed to open pack archive {}: {error}", archive.display()))?;
+    let mut zip = ZipArchive::new(file)
+        .map_err(|error| format!("failed to open pack archive {}: {error}", archive.display()))?;
+    let mut source = zip
+        .by_name(entry)
+        .map_err(|error| format!("pack archive is missing `{entry}`: {error}"))?;
+    let mut bytes = Vec::new();
+    source
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to extract pack archive entry `{entry}`: {error}"))?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(format!(
+            "locked pack override `{entry}` hash mismatch: expected {expected}, got {actual}"
+        ));
+    }
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "pack destination has no filename: {}",
+                destination.display()
+            )
+        })?;
+    let output_dir = cache_dir.join(expected);
+    fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("failed to create {}: {error}", output_dir.display()))?;
+    let output = output_dir.join(file_name);
+    fs::write(&output, bytes)
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    Ok(output)
 }
 
 pub(super) fn verify_locked_artifact_hash(

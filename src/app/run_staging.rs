@@ -1,12 +1,31 @@
 use super::*;
 
 pub(super) fn reconcile_mods(
-    root: &Path,
     lock_path: &Path,
     instance: &Instance,
+    root: &Path,
     mods_dir: &Path,
     cache_dir: &Path,
 ) -> Result<(), String> {
+    let mut sources = locked_mod_sources(lock_path, &instance.name)?;
+    if sources.is_empty() {
+        sources.clone_from(&instance.mods);
+    }
+    for source in sources {
+        let path = restore_locked_mod_path(lock_path, &instance.name, &source, cache_dir)?
+            .or_else(|| local_mod_path(root, &source));
+        let Some(path) = path else { continue };
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("resolved mod has no filename: {}", path.display()))?;
+        fs::copy(&path, mods_dir.join(file_name))
+            .map_err(|error| format!("failed to stage mod {}: {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn clear_mods(mods_dir: &Path) -> Result<(), String> {
     for entry in fs::read_dir(mods_dir)
         .map_err(|error| format!("failed to read {}: {error}", mods_dir.display()))?
     {
@@ -21,17 +40,48 @@ pub(super) fn reconcile_mods(
         }
     }
 
-    for source in &instance.mods {
-        let Some(path) = resolved_mod_path(root, lock_path, instance, source, cache_dir)? else {
-            continue;
-        };
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| format!("resolved mod has no filename: {}", path.display()))?;
-        fs::copy(&path, mods_dir.join(file_name))
-            .map_err(|error| format!("failed to stage mod {}: {error}", path.display()))?;
+    Ok(())
+}
+
+pub(super) fn reconcile_pack_files(
+    lock_path: &Path,
+    instance: &Instance,
+    side: &str,
+    game_dir: &Path,
+    cache_dir: &Path,
+) -> Result<(), String> {
+    let manifest = game_dir.join(".modstage-pack-files");
+    if manifest.is_file() {
+        let previous = fs::read_to_string(&manifest)
+            .map_err(|error| format!("failed to read {}: {error}", manifest.display()))?;
+        for destination in previous.lines().filter(|line| !line.is_empty()) {
+            let destination = safe_pack_destination(destination)?;
+            let path = game_dir.join(destination);
+            if path.is_file() {
+                fs::remove_file(&path)
+                    .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
+            }
+        }
     }
 
+    let files = restore_locked_pack_files(lock_path, &instance.name, side, cache_dir)?;
+    let mut destinations = Vec::new();
+    for file in files {
+        let output = game_dir.join(&file.destination);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::copy(&file.path, &output)
+            .map_err(|error| format!("failed to stage pack file {}: {error}", output.display()))?;
+        destinations.push(file.destination.to_string_lossy().replace('\\', "/"));
+    }
+    destinations.sort();
+    fs::write(
+        &manifest,
+        destinations.join("\n") + if destinations.is_empty() { "" } else { "\n" },
+    )
+    .map_err(|error| format!("failed to write {}: {error}", manifest.display()))?;
     Ok(())
 }
 
@@ -54,6 +104,43 @@ pub(super) fn apply_fixtures(
     }
 
     Ok(())
+}
+
+pub(super) fn apply_server_properties(instance: &Instance, game_dir: &Path) -> Result<(), String> {
+    if instance.server_properties.is_empty() {
+        return Ok(());
+    }
+    let path = game_dir.join("server.properties");
+    let existing = if path.is_file() {
+        fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+    } else {
+        String::new()
+    };
+    let mut remaining = instance
+        .server_properties
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut output = Vec::new();
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        let key = (!trimmed.starts_with('#') && !trimmed.starts_with('!'))
+            .then(|| trimmed.split(['=', ':']).next().unwrap_or("").trim())
+            .filter(|key| !key.is_empty());
+        if let Some((key, value)) = key.and_then(|key| remaining.remove_entry(key)) {
+            output.push(format!("{key}={value}"));
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    output.extend(
+        remaining
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}")),
+    );
+    fs::write(&path, output.join("\n") + "\n")
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 pub(super) fn write_side_launcher_metadata(
@@ -136,34 +223,4 @@ pub(super) fn copy_fixture_tree(
     }
 
     Ok(())
-}
-
-pub(super) fn resolved_mod_path(
-    root: &Path,
-    lock_path: &Path,
-    instance: &Instance,
-    source: &str,
-    cache_dir: &Path,
-) -> Result<Option<PathBuf>, String> {
-    if let Some(path) = local_mod_path(root, source) {
-        return path
-            .canonicalize()
-            .map(Some)
-            .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()));
-    }
-
-    if let Some(path) = restore_locked_mod_path(lock_path, &instance.name, source, cache_dir)? {
-        return path
-            .canonicalize()
-            .map(Some)
-            .map_err(|error| format!("failed to resolve locked mod {}: {error}", path.display()));
-    }
-
-    if let Some(coordinates) = MavenCoordinates::parse(source) {
-        return Ok(maven_artifact(&[], &coordinates)
-            .map(|(_, path)| path)
-            .and_then(|path| path.canonicalize().ok()));
-    }
-
-    Ok(None)
 }

@@ -29,6 +29,50 @@ impl LockfileWriter {
             self.doc.string("loader_version", version);
         }
         self.doc.string_array("sides", &instance.sides);
+        if !instance.server_properties.is_empty() {
+            self.doc.blank();
+            self.doc.table("server_properties");
+            for (key, value) in &instance.server_properties {
+                self.doc.string(key, value);
+            }
+        }
+    }
+
+    pub(super) fn modrinth_pack(&mut self, pack: ModrinthPack) {
+        self.doc.blank();
+        self.doc.table("pack");
+        self.doc.string("source", pack.source);
+        self.doc.string("provider", "modrinth");
+        self.doc.string("project", pack.project);
+        self.doc.string("version_id", pack.version_id);
+        self.doc.string("version_number", pack.version_number);
+        self.doc.string("name", pack.name);
+        self.doc.string("index_version", pack.index_version);
+        self.doc.string("archive_url", pack.archive_url);
+        self.doc
+            .string("archive_path", pack.archive_path.display().to_string());
+        self.doc.string("archive_sha256", pack.archive_sha256);
+
+        for file in pack.files {
+            self.doc.blank();
+            self.doc.array_table("pack_file");
+            self.doc.string("destination", file.destination);
+            self.doc.string_array("sides", &file.sides);
+            if let Some(url) = file.url {
+                self.doc.string("url", url);
+            }
+            self.doc.string("path", file.path.display().to_string());
+            if !file.sha1.is_empty() {
+                self.doc.string("sha1", file.sha1);
+            }
+            if !file.sha512.is_empty() {
+                self.doc.string("sha512", file.sha512);
+            }
+            self.doc.string("sha256", file.sha256);
+            if let Some(entry) = file.archive_entry {
+                self.doc.string("archive_entry", entry);
+            }
+        }
     }
 
     pub(super) fn minecraft(&mut self, instance: &Instance, metadata: MinecraftMetadata) {
@@ -142,6 +186,10 @@ impl LockfileWriter {
         self.doc.string("sha1", resolved.sha1);
         self.doc.string("sha512", resolved.sha512);
         self.doc.string("sha256", resolved.sha256);
+        if !resolved.required_projects.is_empty() {
+            self.doc
+                .string_array("required_projects", &resolved.required_projects);
+        }
     }
 
     pub(super) fn maven_mod(

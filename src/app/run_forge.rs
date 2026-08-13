@@ -535,6 +535,8 @@ version = "26.1.2.66-beta"
             loader: "neoforge".to_string(),
             loader_version: Some("latest".to_string()),
             sides: vec!["client".to_string()],
+            modrinth_pack: None,
+            server_properties: Vec::new(),
             mods: Vec::new(),
             fixtures: Vec::new(),
         };
