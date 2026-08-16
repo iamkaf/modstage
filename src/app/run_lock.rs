@@ -585,6 +585,7 @@ pub(super) fn fetch_locked_assets(
         if let Some(expected) = lock.value("index_sha256") {
             verify_file_hash("locked asset index", &id, &index_path, &expected)?;
         }
+        hydrate_asset_objects(&index_path, &assets_dir)?;
     }
 
     Ok(assets_dir)

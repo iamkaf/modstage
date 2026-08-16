@@ -3162,17 +3162,24 @@ fn locked_client_run_restores_asset_index_before_launch() {
     let client = metadata.join("client.jar");
     fs::write(&server, b"server").expect("failed to write server jar");
     fs::write(&client, b"client").expect("failed to write client jar");
+    let asset_object = metadata.join("example.ogg");
+    fs::write(&asset_object, b"hello").expect("failed to write asset object");
+    let asset_hash = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d";
     let asset_index = metadata.join("assets-26.json");
     fs::write(
         &asset_index,
-        r#"{{
+        format!(
+            r#"{{
   "objects": {{
     "minecraft/sounds/example.ogg": {{
-      "hash": "05fac94380a70241f23780e7aef62b190894238f",
-      "size": 5
+      "hash": "{asset_hash}",
+      "size": 5,
+      "url": "file://{}"
     }}
   }}
 }}"#,
+            asset_object.display()
+        ),
     )
     .expect("failed to write asset index");
     let version_json = metadata.join("26.1.2.json");
@@ -3210,7 +3217,7 @@ fn locked_client_run_restores_asset_index_before_launch() {
     let fake_java = metadata.join("fake-java-locked-assets");
     fs::write(
         &fake_java,
-        "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest ! -d \"$assets_dir/objects\" || exit 13\nprintf 'asset index restored\\n'\n",
+        "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/aa/aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d\" || exit 13\nprintf 'asset index restored\\n'\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)

@@ -215,7 +215,7 @@ Failure classes include timeout, crash report, mixin failure, Minecraft startup 
 
 ### Downloads
 
-Modstage records and verifies Mojang's asset index so the client receives the expected `--assetIndex` and `--assetsDir` arguments. It does not lock or restore individual Minecraft asset objects; modstage is for testing mods, not validating Mojang's asset CDN contents.
+Modstage records and verifies Mojang's asset index, then downloads the objects it names into the asset cache so a client can actually start. Object hashes stay out of the lockfile. A later `--locked` run restores any missing objects from the locked index.
 
 Downloads use `reqwest` with Rustls.
 
