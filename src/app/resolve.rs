@@ -72,7 +72,7 @@ pub(super) fn resolve_instance_lock(
     maven_cache: &Path,
 ) -> Result<(), String> {
     let mut pack_projects = std::collections::HashSet::new();
-    lock.begin_instance(instance);
+    lock.begin_instance(instance, &instance_resolve_digest(config, instance));
     let metadata = resolve_minecraft_metadata(config, instance, config_root)?;
     if let Some(metadata) = metadata {
         lock.minecraft(instance, metadata);

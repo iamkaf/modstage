@@ -143,7 +143,7 @@ in the instance lock.
 | --- | --- |
 | `modstage init` | Create a starter `modstage.toml` |
 | `modstage resolve [instance]` | Generate per-instance state lockfiles without launching |
-| `modstage run <client\|server> <instance>` | Resolve if needed, then stage and launch one side of one instance |
+| `modstage run <client\|server> <instance>` | Resolve if the lock is missing or the instance config changed, then stage and launch one side |
 | `modstage inspect config` | Print config and state directories |
 | `modstage inspect lock [instance]` | Print generated state lockfiles |
 | `modstage inspect instance <instance> [--side <client\|server>]` | Print staged files |
@@ -159,6 +159,15 @@ Global option:
 | Option | Description |
 | --- | --- |
 | `--config <path>` | Use an explicit `modstage.toml` |
+
+`run` options:
+
+| Option | Description |
+| --- | --- |
+| `--locked` | Fail instead of refreshing a missing or stale instance lock |
+| `--keep-alive` | Leave a ready server running until timeout |
+| `--java <path>` | Use an explicit Java executable |
+| `--timeout <duration>` | Bound the launch, for example `120s` |
 
 ### Runtime Behavior
 

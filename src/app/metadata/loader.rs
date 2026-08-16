@@ -170,8 +170,30 @@ pub(in crate::app) fn loader_metadata_text(
         root,
         loader,
         url,
-        &format!("{}-loader.json", instance.minecraft),
+        &loader_metadata_cache_name(instance),
     )
+}
+
+fn loader_metadata_cache_name(instance: &Instance) -> String {
+    let version = requested_loader_version(instance)
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("{}-{}-loader.json", instance.minecraft, version)
+}
+
+pub(in crate::app) fn requested_loader_version(instance: &Instance) -> &str {
+    instance
+        .loader_version
+        .as_deref()
+        .filter(|version| !version.is_empty() && *version != "latest")
+        .unwrap_or("latest")
 }
 
 fn cached_loader_metadata(
@@ -496,6 +518,40 @@ fn installer_artifact_version(loader: &str, minecraft: &str, version: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_instance(loader_version: Option<&str>) -> Instance {
+        Instance {
+            name: "fabric-26.1.2".to_string(),
+            minecraft: "26.1.2".to_string(),
+            loader: "fabric".to_string(),
+            loader_version: loader_version.map(str::to_string),
+            sides: vec!["server".to_string()],
+            modrinth_pack: None,
+            server_properties: Vec::new(),
+            mods: Vec::new(),
+            fixtures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn loader_metadata_cache_names_include_the_requested_version() {
+        assert_eq!(
+            loader_metadata_cache_name(&test_instance(None)),
+            "26.1.2-latest-loader.json"
+        );
+        assert_eq!(
+            loader_metadata_cache_name(&test_instance(Some("latest"))),
+            "26.1.2-latest-loader.json"
+        );
+        assert_eq!(
+            loader_metadata_cache_name(&test_instance(Some("0.19.3"))),
+            "26.1.2-0.19.3-loader.json"
+        );
+        assert_eq!(
+            loader_metadata_cache_name(&test_instance(Some("0.19.3/rc"))),
+            "26.1.2-0.19.3_rc-loader.json"
+        );
+    }
 
     #[test]
     fn neoforge_version_numbers_map_to_minecraft_versions() {

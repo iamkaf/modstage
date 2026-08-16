@@ -19,7 +19,7 @@ impl LockfileWriter {
         Self { doc }
     }
 
-    pub(super) fn begin_instance(&mut self, instance: &Instance) {
+    pub(super) fn begin_instance(&mut self, instance: &Instance, config_digest: &str) {
         self.doc.blank();
         self.doc.array_table("instance");
         self.doc.string("instance", &instance.name);
@@ -28,6 +28,7 @@ impl LockfileWriter {
         if let Some(version) = &instance.loader_version {
             self.doc.string("loader_version", version);
         }
+        self.doc.string("config_digest", config_digest);
         self.doc.string_array("sides", &instance.sides);
         if !instance.server_properties.is_empty() {
             self.doc.blank();

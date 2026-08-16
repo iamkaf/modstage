@@ -24,15 +24,17 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             config,
             command.get_one::<String>("instance").map(String::as_str),
         ),
-        Some(("run", command)) => {
-            let rest = rest(command);
-            run_instance(
-                config,
-                required(command, "side")?,
-                required(command, "instance")?,
-                &rest,
-            )
-        }
+        Some(("run", command)) => run_instance(
+            config,
+            required(command, "side")?,
+            required(command, "instance")?,
+            RunOptions {
+                locked: command.get_flag("locked"),
+                keep_alive: command.get_flag("keep_alive"),
+                java: command.get_one::<PathBuf>("java").cloned(),
+                timeout: command.get_one::<String>("timeout").cloned(),
+            },
+        ),
         Some(("inspect", command)) => match command.subcommand() {
             Some(("config", _)) => inspect_config(config),
             Some(("lock", command)) => inspect_lock(
@@ -93,7 +95,31 @@ fn cli() -> Command {
                         .value_parser(["client", "server"]),
                 )
                 .arg(Arg::new("instance").required(true))
-                .arg(rest_arg()),
+                .arg(
+                    Arg::new("locked")
+                        .long("locked")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail if the instance lock is missing or stale"),
+                )
+                .arg(
+                    Arg::new("keep_alive")
+                        .long("keep-alive")
+                        .action(ArgAction::SetTrue)
+                        .help("Leave a ready server running until timeout"),
+                )
+                .arg(
+                    Arg::new("java")
+                        .long("java")
+                        .value_name("path")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .help("Use an explicit Java executable"),
+                )
+                .arg(
+                    Arg::new("timeout")
+                        .long("timeout")
+                        .value_name("duration")
+                        .help("Bound the launch, for example 120s"),
+                ),
         )
         .subcommand(
             Command::new("inspect")

@@ -73,10 +73,17 @@ fn cli_foundation_dispatches_all_planned_commands() {
         );
     }
 
+    let run_help = assert_success(run(&["run", "--help"]), "run help");
+    for expected in ["--locked", "--keep-alive", "--java", "--timeout"] {
+        assert!(
+            run_help.contains(expected),
+            "run help should mention {expected:?}\n{run_help}"
+        );
+    }
+
     for args in [
         &["init", "--help"][..],
         &["resolve", "--help"],
-        &["run", "--help"],
         &["inspect", "config", "--help"],
         &["inspect", "lock", "--help"],
         &["inspect", "instance", "--help"],
