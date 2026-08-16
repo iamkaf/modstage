@@ -584,3 +584,107 @@ sides = ["client", "server"]
     fs::remove_dir_all(data_home).expect("failed to remove data home");
     fs::remove_dir_all(cache_home).expect("failed to remove cache home");
 }
+
+fn write_fabric_loader_metadata(path: &Path, version: &str) {
+    fs::write(
+        path,
+        format!(
+            r#"{{
+  "loader": {{
+    "version": "{version}",
+    "maven": "net.fabricmc:fabric-loader:{version}"
+  }},
+  "intermediary": {{
+    "maven": "net.fabricmc:intermediary:26.1.2"
+  }},
+  "launcherMeta": {{
+    "mainClass": {{
+      "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+    }}
+  }}
+}}"#
+        ),
+    )
+    .expect("failed to write fabric metadata");
+}
+
+fn write_fabric_pin_config(project: &Path, version: &str) {
+    fs::write(
+        project.join("modstage.toml"),
+        format!(
+            r#"[project]
+name = "fabric-pin-cache"
+
+[[instance]]
+name = "fabric-26.1.2"
+minecraft = "26.1.2"
+loader = "fabric"
+loader_version = "{version}"
+sides = ["client", "server"]
+"#
+        ),
+    )
+    .expect("failed to write config");
+}
+
+#[test]
+fn resolve_uses_fresh_loader_metadata_after_pin_change() {
+    let project = temp_dir("fabric-pin-cache-project");
+    let metadata = temp_dir("fabric-pin-cache-metadata");
+    let data_home = temp_dir("fabric-pin-cache-data");
+    let cache_home = temp_dir("fabric-pin-cache-cache");
+    let fabric_metadata = metadata.join("fabric-loader.json");
+    write_fabric_loader_metadata(&fabric_metadata, "0.18.4");
+    write_fabric_pin_config(&project, "0.18.4");
+
+    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let envs = [
+        ("MODSTAGE_FABRIC_META_URL", fabric_url.as_str()),
+        (
+            "XDG_DATA_HOME",
+            data_home.to_str().expect("data path is not UTF-8"),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            cache_home.to_str().expect("cache path is not UTF-8"),
+        ),
+    ];
+    let first = run_in_with_env(&["resolve", "fabric-26.1.2"], &project, &envs);
+    assert!(
+        first.status.success(),
+        "first resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    write_fabric_loader_metadata(&fabric_metadata, "0.19.3");
+    write_fabric_pin_config(&project, "0.19.3");
+    let second = run_in_with_env(&["resolve", "fabric-26.1.2"], &project, &envs);
+    assert!(
+        second.status.success(),
+        "second resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "fabric-pin-cache",
+        "fabric-26.1.2",
+    ))
+    .expect("modstage.lock should exist");
+    assert!(
+        lock.contains(r#"loader_version = "0.19.3""#)
+            && lock.contains(r#"version = "0.19.3""#)
+            && lock.contains(r#"loader_maven = "net.fabricmc:fabric-loader:0.19.3""#)
+            && !lock.contains("0.18.4"),
+        "resolve should not reuse cached metadata from a different loader pin\n{lock}"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}

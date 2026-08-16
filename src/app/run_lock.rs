@@ -373,14 +373,60 @@ pub(super) fn restore_locked_mod(
     Ok(None)
 }
 
-pub(super) fn lock_is_stale_for_instance(lock_path: &Path, instance: &str) -> Result<bool, String> {
+pub(super) fn instance_resolve_digest(config: &Config, instance: &Instance) -> String {
+    let mut payload = format!(
+        "minecraft={}\nloader={}\nloader_version={}\n",
+        instance.minecraft,
+        instance.loader,
+        requested_loader_version(instance)
+    );
+    payload.push_str("sides=");
+    payload.push_str(&instance.sides.join("\t"));
+    payload.push('\n');
+    payload.push_str("pack=");
+    if let Some(pack) = &instance.modrinth_pack {
+        payload.push_str(pack);
+    }
+    payload.push('\n');
+    payload.push_str("mods=");
+    payload.push_str(&instance.mods.join("\t"));
+    payload.push('\n');
+    for (key, value) in &instance.server_properties {
+        payload.push_str("prop=");
+        payload.push_str(key);
+        payload.push('\t');
+        payload.push_str(value);
+        payload.push('\n');
+    }
+    for (name, url) in &config.repositories {
+        payload.push_str("repo=");
+        payload.push_str(name);
+        payload.push('\t');
+        payload.push_str(url);
+        payload.push('\n');
+    }
+    sha256_hex(payload.as_bytes())
+}
+
+pub(super) fn lock_is_stale_for_instance(
+    lock_path: &Path,
+    config: &Config,
+    instance: &Instance,
+) -> Result<bool, String> {
     if !lock_path.is_file() {
         return Ok(true);
     }
 
     let lock = fs::read_to_string(lock_path)
         .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
-    Ok(instance_block(&lock, instance).is_none())
+    let Some(block) = instance_block(&lock, &instance.name) else {
+        return Ok(true);
+    };
+    // Older locks omit config_digest and only go stale when the instance name is missing.
+    let Some(digest) = block_string_value(block, "config_digest") else {
+        return Ok(false);
+    };
+    Ok(digest != instance_resolve_digest(config, instance))
 }
 
 pub(super) fn locked_minecraft_url(
@@ -539,6 +585,7 @@ pub(super) fn fetch_locked_assets(
         if let Some(expected) = lock.value("index_sha256") {
             verify_file_hash("locked asset index", &id, &index_path, &expected)?;
         }
+        hydrate_asset_objects(&index_path, &assets_dir)?;
     }
 
     Ok(assets_dir)
@@ -576,4 +623,51 @@ pub(super) fn block_string_value(block: &str, key: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .find_map(|line| string_value(line, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config(loader_version: Option<&str>, mods: &[&str]) -> (Config, Instance) {
+        let instance = Instance {
+            name: "vanilla-26.1.2".to_string(),
+            minecraft: "26.1.2".to_string(),
+            loader: "vanilla".to_string(),
+            loader_version: loader_version.map(str::to_string),
+            sides: vec!["server".to_string()],
+            modrinth_pack: None,
+            server_properties: Vec::new(),
+            mods: mods.iter().map(|source| (*source).to_string()).collect(),
+            fixtures: Vec::new(),
+        };
+        let config = Config {
+            project_name: "digest-test".to_string(),
+            repositories: Vec::new(),
+            instances: Vec::new(),
+        };
+        (config, instance)
+    }
+
+    #[test]
+    fn resolve_digest_changes_when_loader_or_mods_change() {
+        let (config, latest) = test_config(None, &[]);
+        let explicit_latest = test_config(Some("latest"), &[]).1;
+        let pinned = test_config(Some("0.18.4"), &[]).1;
+        let later_loader = test_config(Some("0.19.3"), &[]).1;
+        let with_mod = test_config(None, &["./extra.jar"]).1;
+
+        assert_eq!(
+            instance_resolve_digest(&config, &latest),
+            instance_resolve_digest(&config, &explicit_latest)
+        );
+        assert_ne!(
+            instance_resolve_digest(&config, &pinned),
+            instance_resolve_digest(&config, &later_loader)
+        );
+        assert_ne!(
+            instance_resolve_digest(&config, &latest),
+            instance_resolve_digest(&config, &with_mod)
+        );
+    }
 }

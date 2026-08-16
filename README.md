@@ -143,7 +143,7 @@ in the instance lock.
 | --- | --- |
 | `modstage init` | Create a starter `modstage.toml` |
 | `modstage resolve [instance]` | Generate per-instance state lockfiles without launching |
-| `modstage run <client\|server> <instance>` | Resolve if needed, then stage and launch one side of one instance |
+| `modstage run <client\|server> <instance>` | Resolve if the lock is missing or the instance config changed, then stage and launch one side |
 | `modstage inspect config` | Print config and state directories |
 | `modstage inspect lock [instance]` | Print generated state lockfiles |
 | `modstage inspect instance <instance> [--side <client\|server>]` | Print staged files |
@@ -159,6 +159,15 @@ Global option:
 | Option | Description |
 | --- | --- |
 | `--config <path>` | Use an explicit `modstage.toml` |
+
+`run` options:
+
+| Option | Description |
+| --- | --- |
+| `--locked` | Fail instead of refreshing a missing or stale instance lock |
+| `--keep-alive` | Leave a ready server running until timeout |
+| `--java <path>` | Use an explicit Java executable |
+| `--timeout <duration>` | Bound the launch, for example `120s` |
 
 ### Runtime Behavior
 
@@ -206,7 +215,7 @@ Failure classes include timeout, crash report, mixin failure, Minecraft startup 
 
 ### Downloads
 
-Modstage records and verifies Mojang's asset index so the client receives the expected `--assetIndex` and `--assetsDir` arguments. It does not lock or restore individual Minecraft asset objects; modstage is for testing mods, not validating Mojang's asset CDN contents.
+Modstage records and verifies Mojang's asset index, then downloads the objects it names into the asset cache so a client can actually start. Object hashes stay out of the lockfile. A later `--locked` run restores any missing objects from the locked index.
 
 Downloads use `reqwest` with Rustls.
 

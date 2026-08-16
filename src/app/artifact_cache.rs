@@ -10,6 +10,7 @@ const HTTP_USER_AGENT: &str = concat!(
 static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     reqwest::blocking::Client::builder()
         .user_agent(HTTP_USER_AGENT)
+        .timeout(Duration::from_secs(120))
         .build()
         .expect("HTTP client configuration should be valid")
 });

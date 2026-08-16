@@ -632,7 +632,7 @@ sides = ["client", "server"]
 }
 
 #[test]
-fn resolve_records_mojang_asset_index_without_objects() {
+fn resolve_downloads_mojang_asset_objects_without_locking_them() {
     let project = temp_dir("mojang-assets-project");
     let metadata = temp_dir("mojang-assets-metadata");
     let data_home = temp_dir("mojang-assets-data");
@@ -641,7 +641,10 @@ fn resolve_records_mojang_asset_index_without_objects() {
     let server = metadata.join("server.jar");
     fs::write(&client, b"client").expect("failed to write client jar");
     fs::write(&server, b"server").expect("failed to write server jar");
-    let asset_hash = "05fac94380a70241f23780e7aef62b190894238f";
+    let asset_bytes = b"hello";
+    let asset_hash = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d";
+    let asset_object = metadata.join("example.ogg");
+    fs::write(&asset_object, asset_bytes).expect("failed to write asset object");
     let assets_json = metadata.join("assets-26.json");
     fs::write(
         &assets_json,
@@ -651,10 +654,11 @@ fn resolve_records_mojang_asset_index_without_objects() {
     "minecraft/sounds/example.ogg": {{
       "hash": "{asset_hash}",
       "size": 5,
-      "url": "file:///ignored-asset-object"
+      "url": "file://{}"
     }}
   }}
 }}"#,
+            asset_object.display()
         ),
     )
     .expect("failed to write asset index json");
@@ -748,9 +752,21 @@ sides = ["client", "server"]
     assert!(
         !lock.contains("[[asset]]")
             && !lock.contains("minecraft/sounds/example.ogg")
-            && !lock.contains(asset_hash)
-            && !lock.contains("ignored-asset-object"),
+            && !lock.contains(asset_hash),
         "lockfile must not record individual Minecraft asset objects\n{lock}"
+    );
+    let cached_object = cache_home
+        .join("modstage")
+        .join("downloads")
+        .join("mojang")
+        .join("assets")
+        .join("objects")
+        .join(&asset_hash[..2])
+        .join(asset_hash);
+    assert_eq!(
+        fs::read(&cached_object).expect("resolve should download the asset object"),
+        asset_bytes,
+        "cached asset object should match the source bytes"
     );
 
     fs::remove_dir_all(project).expect("failed to remove project");

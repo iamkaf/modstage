@@ -1,6 +1,9 @@
 use super::*;
 use rayon::prelude::*;
 use serde::Deserialize;
+use std::collections::HashMap;
+
+const DEFAULT_MOJANG_ASSET_BASE: &str = "https://resources.download.minecraft.net";
 
 #[derive(Deserialize)]
 struct MojangManifest {
@@ -63,6 +66,18 @@ struct MojangLibraryArtifact {
 struct MojangAssetIndex {
     id: String,
     url: String,
+}
+
+#[derive(Clone, Deserialize)]
+struct AssetIndexFile {
+    objects: HashMap<String, AssetObject>,
+}
+
+#[derive(Clone, Deserialize)]
+struct AssetObject {
+    hash: String,
+    size: Option<u64>,
+    url: Option<String>,
 }
 
 pub(in crate::app) struct MinecraftMetadata {
@@ -204,12 +219,82 @@ fn resolve_minecraft_assets_from_version(
     )?;
     let index = fs::read(&index_path)
         .map_err(|error| format!("failed to read {}: {error}", index_path.display()))?;
+    hydrate_asset_objects(&index_path, &cache_dir.join("assets"))?;
 
     Ok(Some(MinecraftAssets {
         id: id.clone(),
         index_url: index_url.clone(),
         index_sha256: sha256_hex(&index),
     }))
+}
+
+pub(in crate::app) fn hydrate_asset_objects(
+    index_path: &Path,
+    assets_dir: &Path,
+) -> Result<usize, String> {
+    let index = fs::read(index_path)
+        .map_err(|error| format!("failed to read {}: {error}", index_path.display()))?;
+    let parsed: AssetIndexFile = serde_json::from_slice(&index).map_err(|error| {
+        format!(
+            "failed to parse asset index {}: {error}",
+            index_path.display()
+        )
+    })?;
+    let count = parsed.objects.len();
+    let objects_dir = assets_dir.join("objects");
+    parsed
+        .objects
+        .into_values()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .try_for_each(|object| restore_asset_object(&object, &objects_dir))?;
+    Ok(count)
+}
+
+fn restore_asset_object(object: &AssetObject, objects_dir: &Path) -> Result<(), String> {
+    let hash = object.hash.to_ascii_lowercase();
+    if hash.len() < 2 || !hash.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(format!("invalid Minecraft asset hash `{hash}`"));
+    }
+    let destination = objects_dir.join(&hash[..2]).join(&hash);
+    if asset_object_is_current(&destination, &hash, object.size)? {
+        return Ok(());
+    }
+    let url = asset_object_url(object, &hash);
+    fetch_to_cache(&url, destination.parent().unwrap_or(objects_dir), &hash)?;
+    if !asset_object_is_current(&destination, &hash, object.size)? {
+        return Err(format!(
+            "Minecraft asset `{hash}` hash mismatch after download from {url}"
+        ));
+    }
+    Ok(())
+}
+
+fn asset_object_is_current(
+    path: &Path,
+    hash: &str,
+    expected_size: Option<u64>,
+) -> Result<bool, String> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if expected_size.is_some_and(|size| bytes.len() as u64 != size) {
+        return Ok(false);
+    }
+    Ok(sha1_hex(&bytes) == hash)
+}
+
+fn asset_object_url(object: &AssetObject, hash: &str) -> String {
+    if let Some(url) = &object.url
+        && !url.is_empty()
+    {
+        return url.clone();
+    }
+    let base = env::var("MODSTAGE_MOJANG_ASSET_BASE")
+        .unwrap_or_else(|_| DEFAULT_MOJANG_ASSET_BASE.to_string());
+    format!("{}/{}/{}", base.trim_end_matches('/'), &hash[..2], hash)
 }
 
 fn resolve_minecraft_libraries_from_version(

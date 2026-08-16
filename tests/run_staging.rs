@@ -2203,6 +2203,211 @@ sides = ["server"]
 
 #[test]
 #[cfg(unix)]
+fn run_refreshes_lock_when_instance_config_changes() {
+    let project = temp_dir("run-config-change-project");
+    let metadata = temp_dir("run-config-change-metadata");
+    let data_home = temp_dir("run-config-change-data");
+    let cache_home = temp_dir("run-config-change-cache");
+    let manifest = write_minimal_mojang_metadata(&metadata);
+    let extra = project.join("extra.jar");
+    fs::write(&extra, b"extra").expect("failed to write extra jar");
+    let fake_java = metadata.join("fake-java-config-change");
+    fs::write(
+        &fake_java,
+        "#!/bin/sh\nprintf 'config change stdout\\n'\nprintf '%s\\n' \"$@\" > java-args.txt\n",
+    )
+    .expect("failed to write fake java");
+    let mut permissions = fs::metadata(&fake_java)
+        .expect("fake java metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_java, permissions).expect("failed to chmod fake java");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-config-change"
+
+[[instance]]
+name = "server-config-change-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-config-change-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-config-change"
+
+[[instance]]
+name = "server-config-change-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+mods = ["./extra.jar"]
+"#,
+    )
+    .expect("failed to rewrite config");
+
+    let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
+    let run = run_in_with_string_env(
+        &[
+            "run",
+            "server",
+            "server-config-change-26.1.2",
+            "--java",
+            fake_java_str,
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "run should refresh the lock after a config change\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let lock = fs::read_to_string(state_lock_path(
+        &data_home,
+        &project,
+        "run-config-change",
+        "server-config-change-26.1.2",
+    ))
+    .expect("lockfile should be readable");
+    assert!(
+        lock.contains("./extra.jar"),
+        "run should resolve the added mod into the lock\n{lock}"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("config change stdout"),
+        "run should launch after refreshing the lock"
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+fn locked_run_rejects_lock_when_instance_config_changes() {
+    let project = temp_dir("run-locked-config-change-project");
+    let metadata = temp_dir("run-locked-config-change-metadata");
+    let data_home = temp_dir("run-locked-config-change-data");
+    let cache_home = temp_dir("run-locked-config-change-cache");
+    let manifest = write_minimal_mojang_metadata(&metadata);
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-locked-config-change"
+
+[[instance]]
+name = "server-locked-config-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+"#,
+    )
+    .expect("failed to write config");
+
+    let manifest_url = format!("file://{}", manifest.display());
+    let data_home_str = data_home.to_str().expect("data path is not UTF-8");
+    let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
+    let resolve = run_in_with_string_env(
+        &["resolve", "server-locked-config-26.1.2"],
+        &project,
+        &[
+            ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&resolve.stdout),
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    fs::write(project.join("extra.jar"), b"extra").expect("failed to write extra jar");
+    fs::write(
+        project.join("modstage.toml"),
+        r#"[project]
+name = "run-locked-config-change"
+
+[[instance]]
+name = "server-locked-config-26.1.2"
+minecraft = "26.1.2"
+loader = "vanilla"
+sides = ["server"]
+mods = ["./extra.jar"]
+"#,
+    )
+    .expect("failed to rewrite config");
+
+    let run = run_in_with_string_env(
+        &[
+            "run",
+            "server",
+            "server-locked-config-26.1.2",
+            "--locked",
+            "--timeout",
+            "5s",
+        ],
+        &project,
+        &[
+            ("XDG_DATA_HOME", data_home_str),
+            ("XDG_CACHE_HOME", cache_home_str),
+        ],
+    );
+    assert!(
+        !run.status.success(),
+        "locked run should reject a lock that no longer matches the config"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("locked run") && stderr.contains("server-locked-config-26.1.2"),
+        "locked run should ask for resolve after a config change\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        stderr
+    );
+
+    fs::remove_dir_all(project).expect("failed to remove project");
+    fs::remove_dir_all(metadata).expect("failed to remove metadata");
+    fs::remove_dir_all(data_home).expect("failed to remove data home");
+    fs::remove_dir_all(cache_home).expect("failed to remove cache home");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_client_executes_resolved_minecraft_artifact_with_configured_java() {
     let project = temp_dir("run-client-exec-project");
     let metadata = temp_dir("run-client-exec-metadata");
@@ -2957,17 +3162,24 @@ fn locked_client_run_restores_asset_index_before_launch() {
     let client = metadata.join("client.jar");
     fs::write(&server, b"server").expect("failed to write server jar");
     fs::write(&client, b"client").expect("failed to write client jar");
+    let asset_object = metadata.join("example.ogg");
+    fs::write(&asset_object, b"hello").expect("failed to write asset object");
+    let asset_hash = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d";
     let asset_index = metadata.join("assets-26.json");
     fs::write(
         &asset_index,
-        r#"{{
+        format!(
+            r#"{{
   "objects": {{
     "minecraft/sounds/example.ogg": {{
-      "hash": "05fac94380a70241f23780e7aef62b190894238f",
-      "size": 5
+      "hash": "{asset_hash}",
+      "size": 5,
+      "url": "file://{}"
     }}
   }}
 }}"#,
+            asset_object.display()
+        ),
     )
     .expect("failed to write asset index");
     let version_json = metadata.join("26.1.2.json");
@@ -3005,7 +3217,7 @@ fn locked_client_run_restores_asset_index_before_launch() {
     let fake_java = metadata.join("fake-java-locked-assets");
     fs::write(
         &fake_java,
-        "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest ! -d \"$assets_dir/objects\" || exit 13\nprintf 'asset index restored\\n'\n",
+        "#!/bin/sh\nassets_dir=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--assetsDir' ]; then\n    shift\n    assets_dir=\"$1\"\n  fi\n  shift\ndone\ntest -f \"$assets_dir/indexes/26.json\" || exit 12\ntest -f \"$assets_dir/objects/aa/aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d\" || exit 13\nprintf 'asset index restored\\n'\n",
     )
     .expect("failed to write fake java");
     let mut permissions = fs::metadata(&fake_java)

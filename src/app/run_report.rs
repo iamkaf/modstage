@@ -130,7 +130,7 @@ pub(super) fn classify_failure(
         {
             return Ok("mixin");
         }
-        if !success && lower.contains("missing") && lower.contains("depend") {
+        if !success && looks_like_missing_dependency(&lower) {
             return Ok("missing_dependency");
         }
         if !success
@@ -150,6 +150,15 @@ pub(super) fn classify_failure(
     }
 
     Ok("process_exit")
+}
+
+fn looks_like_missing_dependency(log: &str) -> bool {
+    log.lines().any(|line| {
+        line.contains("missing or unsupported mandatory depend")
+            || line.contains("missing mods:")
+            || line.contains("mod resolution failed")
+            || line.contains("incompatible mods found")
+    })
 }
 
 pub(super) fn write_launch_plan(
@@ -257,25 +266,58 @@ pub(super) fn copy_crash_report(source: &Path, run_dir: &Path) -> Result<PathBuf
 mod tests {
     use super::*;
 
-    #[test]
-    fn successful_process_is_not_failed_by_incidental_log_language() {
+    fn classify_log(success: bool, contents: &str) -> &'static str {
         let log = env::temp_dir().join(format!(
-            "modstage-success-log-classification-{}",
-            std::process::id()
+            "modstage-log-classification-{}-{}",
+            std::process::id(),
+            contents.len()
         ));
-        fs::write(&log, "Optional integration has a missing dependency\n")
-            .expect("failed to write classification fixture");
+        fs::write(&log, contents).expect("failed to write classification fixture");
         let artifacts = RunArtifacts {
             minecraft_log: Some(log.clone()),
             crash_report: None,
         };
+        let class = classify_failure(success, false, &artifacts).unwrap();
+        fs::remove_file(log).expect("failed to remove classification fixture");
+        class
+    }
 
-        assert_eq!(classify_failure(true, false, &artifacts).unwrap(), "none");
+    #[test]
+    fn successful_process_is_not_failed_by_incidental_log_language() {
         assert_eq!(
-            classify_failure(false, false, &artifacts).unwrap(),
+            classify_log(true, "Optional integration has a missing dependency\n"),
+            "none"
+        );
+    }
+
+    #[test]
+    fn vanilla_asset_and_discovery_logs_are_not_missing_dependencies() {
+        assert_eq!(
+            classify_log(
+                false,
+                "Missing metadata in pack minecraft:icons\n[net.minecraftforge.fml.loading.moddiscovery.ModDiscoverer/SCAN] Found 5 dependencies\n"
+            ),
+            "process_exit"
+        );
+        assert_eq!(
+            classify_log(false, "Optional integration has a missing dependency\n"),
+            "process_exit"
+        );
+    }
+
+    #[test]
+    fn loader_missing_mod_phrases_are_classified() {
+        assert_eq!(
+            classify_log(false, "Missing or unsupported mandatory dependencies:\n"),
             "missing_dependency"
         );
-
-        fs::remove_file(log).expect("failed to remove classification fixture");
+        assert_eq!(
+            classify_log(false, "Missing Mods:\n  fabric-api\n"),
+            "missing_dependency"
+        );
+        assert_eq!(
+            classify_log(false, "Mod resolution failed!\n"),
+            "missing_dependency"
+        );
     }
 }

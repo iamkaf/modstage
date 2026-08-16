@@ -4,12 +4,11 @@ pub(super) fn run_instance(
     explicit_config: Option<PathBuf>,
     side: &str,
     selected: &str,
-    args: &[String],
+    options: RunOptions,
 ) -> Result<(), String> {
     if side != "client" && side != "server" {
         return Err(format!("unknown side `{side}`"));
     }
-    let options = RunOptions::parse(args)?;
 
     let project = ProjectContext::load(explicit_config)?;
     let instance = project.instance(selected)?;
@@ -24,12 +23,12 @@ pub(super) fn run_instance(
     if options.locked && !lock_path.is_file() {
         return Err("locked run requires modstage.lock; run `modstage resolve` first".to_string());
     }
-    if options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
+    if options.locked && lock_is_stale_for_instance(&lock_path, &project.config, instance)? {
         return Err(format!(
             "locked run requires modstage.lock for instance `{selected}`; run `modstage resolve {selected}` first"
         ));
     }
-    if !options.locked && lock_is_stale_for_instance(&lock_path, selected)? {
+    if !options.locked && lock_is_stale_for_instance(&lock_path, &project.config, instance)? {
         resolve_instance(Some(project.config_path.clone()), Some(selected))?;
     }
     let mod_cache = project.dirs.cache.join("downloads").join("mods");
@@ -120,49 +119,6 @@ pub(super) struct RunOptions {
 }
 
 impl RunOptions {
-    fn parse(args: &[String]) -> Result<Self, String> {
-        let mut locked = false;
-        let mut keep_alive = false;
-        let mut java = None;
-        let mut timeout = None;
-        let mut index = 0;
-
-        while index < args.len() {
-            match args[index].as_str() {
-                "--locked" => {
-                    locked = true;
-                    index += 1;
-                }
-                "--keep-alive" => {
-                    keep_alive = true;
-                    index += 1;
-                }
-                "--java" => {
-                    let Some(path) = args.get(index + 1) else {
-                        return Err("--java requires a path".to_string());
-                    };
-                    java = Some(PathBuf::from(path));
-                    index += 2;
-                }
-                "--timeout" => {
-                    let Some(value) = args.get(index + 1) else {
-                        return Err("--timeout requires a duration".to_string());
-                    };
-                    timeout = Some(value.clone());
-                    index += 2;
-                }
-                option => return Err(format!("unknown run option `{option}`")),
-            }
-        }
-
-        Ok(Self {
-            locked,
-            keep_alive,
-            java,
-            timeout,
-        })
-    }
-
     pub(super) fn timeout_duration(&self) -> Result<Option<Duration>, String> {
         self.timeout.as_deref().map(parse_duration).transpose()
     }
