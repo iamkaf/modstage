@@ -267,10 +267,13 @@ mod tests {
     use super::*;
 
     fn classify_log(success: bool, contents: &str) -> &'static str {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before UNIX_EPOCH")
+            .as_nanos();
         let log = env::temp_dir().join(format!(
-            "modstage-log-classification-{}-{}",
-            std::process::id(),
-            contents.len()
+            "modstage-log-classification-{}-{success}-{nanos}",
+            std::process::id()
         ));
         fs::write(&log, contents).expect("failed to write classification fixture");
         let artifacts = RunArtifacts {
