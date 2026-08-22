@@ -8,7 +8,9 @@ mod support;
 use support::{file_url, file_url_path};
 
 fn toml_path(path: &Path) -> String {
-    path.to_string_lossy()
+    dunce::canonicalize(path)
+        .expect("expected lockfile path should canonicalize")
+        .to_string_lossy()
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
 }
