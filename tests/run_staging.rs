@@ -64,8 +64,7 @@ fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: 
         .join(format!(
             "{project_name}-{:08x}",
             stable_hash(
-                &root
-                    .canonicalize()
+                &dunce::canonicalize(root)
                     .expect("project root should canonicalize")
                     .display()
                     .to_string()
@@ -4087,8 +4086,7 @@ server_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap"
     let project_id = format!(
         "run-forge-reuse-{:08x}",
         stable_hash(
-            &project
-                .canonicalize()
+            &dunce::canonicalize(&project)
                 .expect("project root should canonicalize")
                 .display()
                 .to_string()

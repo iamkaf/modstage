@@ -98,8 +98,7 @@ fn state_lock_path(root: &Path, project_name: &str, instance: &str) -> PathBuf {
         .join(format!(
             "{project_name}-{:08x}",
             stable_hash(
-                &root
-                    .canonicalize()
+                &dunce::canonicalize(root)
                     .expect("project root should canonicalize")
                     .display()
                     .to_string()

@@ -210,8 +210,7 @@ pub(super) fn is_supported_side(side: &str) -> bool {
 }
 
 pub(super) fn discover_config(start: &Path) -> Result<Option<PathBuf>, String> {
-    let mut current = start
-        .canonicalize()
+    let mut current = dunce::canonicalize(start)
         .map_err(|error| format!("failed to resolve {}: {error}", start.display()))?;
 
     loop {
