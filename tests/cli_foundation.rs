@@ -60,6 +60,22 @@ sides = ["client", "server"]
     root
 }
 
+fn assert_inspected_config(output: &str, expected: &Path, context: &str) {
+    let reported = output
+        .lines()
+        .find_map(|line| line.strip_prefix("config: "))
+        .unwrap_or_else(|| panic!("{context} should report a config path\n{output}"));
+    let reported = dunce::canonicalize(reported)
+        .unwrap_or_else(|error| panic!("reported config path should canonicalize: {error}"));
+    let expected = dunce::canonicalize(expected)
+        .unwrap_or_else(|error| panic!("expected config path should canonicalize: {error}"));
+
+    assert!(
+        output.contains("project: cli-foundation") && reported == expected,
+        "{context} should report the config path and project name\n{output}"
+    );
+}
+
 #[test]
 fn cli_foundation_dispatches_all_planned_commands() {
     let root_help = assert_success(run(&["--help"]), "root help");
@@ -113,21 +129,13 @@ fn cli_foundation_finds_config_by_flag_or_parent_search() {
         ]),
         "explicit --config inspect config",
     );
-    assert!(
-        explicit_config.contains("cli-foundation")
-            && explicit_config.contains(config.to_str().expect("temp config path is not UTF-8")),
-        "inspect config should report the explicit config path and project name\n{explicit_config}"
-    );
+    assert_inspected_config(&explicit_config, &config, "explicit inspect config");
 
     let discovered_config = assert_success(
         run_in(&["inspect", "config"], &nested),
         "parent-search inspect config",
     );
-    assert!(
-        discovered_config.contains("cli-foundation")
-            && discovered_config.contains(config.to_str().expect("temp config path is not UTF-8")),
-        "inspect config should discover the parent modstage.toml and report project name\n{discovered_config}"
-    );
+    assert_inspected_config(&discovered_config, &config, "parent-search inspect config");
 
     fs::remove_dir_all(project).expect("failed to remove temp project");
 }
