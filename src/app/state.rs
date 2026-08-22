@@ -13,8 +13,8 @@ impl StateDirs {
             project_name,
             stable_hash(&root.display().to_string())
         );
-        let data = data_home()?.join("modstage");
-        let cache = cache_home()?.join("modstage");
+        let data = data_dir()?;
+        let cache = cache_dir()?;
 
         Ok(Self {
             project_id,
@@ -22,6 +22,26 @@ impl StateDirs {
             cache,
         })
     }
+}
+
+pub(super) fn data_dir() -> Result<PathBuf, String> {
+    if let Some(path) = env::var_os("MODSTAGE_DATA_HOME") {
+        return Ok(PathBuf::from(path).join("modstage"));
+    }
+
+    Ok(data_home()?.join("modstage"))
+}
+
+pub(super) fn cache_dir() -> Result<PathBuf, String> {
+    if let Some(path) = env::var_os("MODSTAGE_CACHE_HOME") {
+        return Ok(PathBuf::from(path).join("modstage"));
+    }
+
+    #[cfg(target_os = "windows")]
+    return Ok(cache_home()?.join("modstage").join("Cache"));
+
+    #[cfg(not(target_os = "windows"))]
+    Ok(cache_home()?.join("modstage"))
 }
 
 #[cfg(target_os = "linux")]
@@ -62,7 +82,7 @@ pub(super) fn data_home() -> Result<PathBuf, String> {
 #[cfg(target_os = "windows")]
 pub(super) fn cache_home() -> Result<PathBuf, String> {
     env::var_os("LOCALAPPDATA")
-        .map(|path| PathBuf::from(path).join("Cache"))
+        .map(PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA is not set".to_string())
 }
 

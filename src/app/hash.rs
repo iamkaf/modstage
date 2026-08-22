@@ -27,7 +27,9 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 
     message.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in message.chunks_exact(64) {
+    let (chunks, remainder) = message.as_chunks::<64>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
         sha256_compress(&mut state, chunk);
     }
 

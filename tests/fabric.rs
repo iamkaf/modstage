@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
+use support::{file_url, file_url_path};
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -56,8 +60,8 @@ fn default_mojang_manifest(root: &Path) -> String {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -66,11 +70,11 @@ fn default_mojang_manifest(root: &Path) -> String {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
-    format!("file://{}", manifest.display())
+    file_url(&manifest)
 }
 
 fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
@@ -143,18 +147,18 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let fabric_url = file_url(&fabric_metadata);
     let output = run_in_with_env(
         &["resolve", "fabric-26.1.2"],
         &project,
         &[
             ("MODSTAGE_FABRIC_META_URL", &fabric_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -219,8 +223,8 @@ fn resolve_uses_default_fabric_metadata_for_latest_loader() {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -229,7 +233,7 @@ fn resolve_uses_default_fabric_metadata_for_latest_loader() {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -268,8 +272,8 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
-    let fabric_meta_url = format!("file://{}", fabric_metadata.display());
+    let manifest_url = file_url(&manifest);
+    let fabric_meta_url = file_url(&fabric_metadata);
     let output = run_in_with_env(
         &["resolve", "fabric-default-26.1.2"],
         &project,
@@ -277,11 +281,11 @@ sides = ["client", "server"]
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             ("MODSTAGE_FABRIC_META_URL", &fabric_meta_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -361,8 +365,8 @@ fn resolve_uses_builtin_fabric_maven_repository_for_loader_artifacts() {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -371,7 +375,7 @@ fn resolve_uses_builtin_fabric_maven_repository_for_loader_artifacts() {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -411,13 +415,13 @@ loader = "fabric"
 loader_version = "latest"
 sides = ["client", "server"]
 "#,
-            metadata.display()
+            file_url_path(&metadata)
         ),
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
-    let fabric_meta_url = format!("file://{}", fabric_metadata.display());
+    let manifest_url = file_url(&manifest);
+    let fabric_meta_url = file_url(&fabric_metadata);
     let output = run_in_with_env(
         &["resolve", "fabric-builtin-repo-26.1.2"],
         &project,
@@ -425,11 +429,11 @@ sides = ["client", "server"]
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             ("MODSTAGE_FABRIC_META_URL", &fabric_meta_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -528,23 +532,23 @@ loader = "fabric"
 loader_version = "latest"
 sides = ["client", "server"]
 "#,
-            repo.display()
+            file_url_path(&repo)
         ),
     )
     .expect("failed to write config");
 
-    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let fabric_url = file_url(&fabric_metadata);
     let output = run_in_with_env(
         &["resolve", "fabric-classpath-26.1.2"],
         &project,
         &[
             ("MODSTAGE_FABRIC_META_URL", &fabric_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -638,15 +642,15 @@ fn resolve_uses_fresh_loader_metadata_after_pin_change() {
     write_fabric_loader_metadata(&fabric_metadata, "0.18.4");
     write_fabric_pin_config(&project, "0.18.4");
 
-    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let fabric_url = file_url(&fabric_metadata);
     let envs = [
         ("MODSTAGE_FABRIC_META_URL", fabric_url.as_str()),
         (
-            "XDG_DATA_HOME",
+            "MODSTAGE_DATA_HOME",
             data_home.to_str().expect("data path is not UTF-8"),
         ),
         (
-            "XDG_CACHE_HOME",
+            "MODSTAGE_CACHE_HOME",
             cache_home.to_str().expect("cache path is not UTF-8"),
         ),
     ];

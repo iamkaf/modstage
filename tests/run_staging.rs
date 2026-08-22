@@ -1,13 +1,20 @@
 use std::fs;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
+use support::{file_url, file_url_path};
+
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::thread;
 
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
@@ -81,6 +88,7 @@ fn write_state_lock(
     fs::write(lock_path, contents).expect("failed to write lockfile");
 }
 
+#[cfg(unix)]
 fn spawn_http_file(path: &'static str, body: &'static [u8]) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind test HTTP server");
     let address = listener
@@ -123,14 +131,17 @@ fn spawn_http_file(path: &'static str, body: &'static [u8]) -> String {
     format!("http://{address}")
 }
 
+#[cfg(unix)]
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+#[cfg(unix)]
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+#[cfg(unix)]
 fn write_stored_jar(path: &Path, entries: &[(&str, &[u8])]) {
     let mut bytes = Vec::new();
     let mut central = Vec::new();
@@ -203,8 +214,8 @@ fn write_minimal_mojang_metadata(root: &Path) -> PathBuf {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -213,7 +224,7 @@ fn write_minimal_mojang_metadata(root: &Path) -> PathBuf {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -263,8 +274,8 @@ mods = [
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
 
@@ -328,8 +339,8 @@ mods = [
         &["inspect", "run", &run_id],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -355,8 +366,8 @@ mods = [
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -390,8 +401,8 @@ mods = [
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -439,7 +450,7 @@ fn run_stages_modrinth_mods_from_the_resolved_lockfile() {
     }}
   }}]
 }}]"#,
-            jar.display()
+            file_url_path(&jar)
         ),
     )
     .expect("failed to write Modrinth versions metadata");
@@ -460,8 +471,8 @@ mods = [
     )
     .expect("failed to write config");
 
-    let versions_url = format!("file://{}", versions.display());
-    let manifest_url = format!("file://{}", manifest.display());
+    let versions_url = file_url(&versions);
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -470,8 +481,8 @@ mods = [
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -485,8 +496,8 @@ mods = [
         &["run", "server", "server-modrinth-26.1.2"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -538,7 +549,7 @@ fn run_stages_maven_file_repository_mods_from_the_resolved_lockfile() {
 name = "run-stage-maven"
 
 [repositories]
-local = "file://{}"
+local = "{}"
 
 [[instance]]
 name = "server-maven-26.1.2"
@@ -549,21 +560,21 @@ mods = [
   "maven:com.example:example-mod:1.0.0",
 ]
 "#,
-            repo.display()
+            file_url(&repo)
         ),
     )
     .expect("failed to write config");
 
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let resolve = run_in_with_string_env(
         &["resolve", "server-maven-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -577,8 +588,8 @@ mods = [
         &["run", "server", "server-maven-26.1.2"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -682,7 +693,7 @@ mods = [
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -690,8 +701,8 @@ mods = [
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -717,8 +728,8 @@ mods = [
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -792,8 +803,8 @@ side = "server"
         &["run", "server", "server-fixture-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -821,8 +832,8 @@ side = "server"
         &["run", "server", "server-fixture-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -883,8 +894,8 @@ replace = true
         &["run", "server", "server-fixture-replace-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -909,8 +920,8 @@ replace = true
         &["run", "server", "server-fixture-replace-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -967,8 +978,8 @@ server_properties = { online-mode = "false", enforce-secure-profile = "false" }
             &["run", "server", "server-properties-1.21.1", "--locked"],
             &project,
             &[
-                ("XDG_DATA_HOME", &data_home),
-                ("XDG_CACHE_HOME", &cache_home),
+                ("MODSTAGE_DATA_HOME", &data_home),
+                ("MODSTAGE_CACHE_HOME", &cache_home),
             ],
         )
     };
@@ -1035,8 +1046,8 @@ mods = [
         &["run", "server", "locked-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
 
@@ -1087,7 +1098,7 @@ mods = [
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1095,8 +1106,8 @@ mods = [
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1112,8 +1123,8 @@ mods = [
         &["run", "server", "locked-hash-26.1.2", "--locked"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -1207,7 +1218,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1215,8 +1226,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1241,8 +1252,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -1329,7 +1340,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1337,8 +1348,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1362,8 +1373,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -1512,7 +1523,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1520,8 +1531,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1545,8 +1556,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -1645,7 +1656,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1653,8 +1664,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1678,8 +1689,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -1773,7 +1784,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -1781,8 +1792,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -1813,8 +1824,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
 
@@ -1939,11 +1950,11 @@ sides = ["server"]
         &project,
         &[
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -2035,7 +2046,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
@@ -2052,8 +2063,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2152,7 +2163,7 @@ sides = ["server"]
         "# This file is generated by modstage. Do not edit by hand.\nversion = 1\n\n[[instance]]\ninstance = \"old-instance\"\n",
     );
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
@@ -2169,8 +2180,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2236,7 +2247,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2244,8 +2255,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2284,8 +2295,8 @@ mods = ["./extra.jar"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2338,7 +2349,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2346,8 +2357,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2384,8 +2395,8 @@ mods = ["./extra.jar"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2468,7 +2479,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2476,8 +2487,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2501,8 +2512,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -2634,7 +2645,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2642,8 +2653,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2664,8 +2675,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -2772,7 +2783,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2780,8 +2791,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2802,8 +2813,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -2935,7 +2946,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -2943,8 +2954,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -2968,8 +2979,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3083,7 +3094,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -3091,8 +3102,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -3117,8 +3128,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3239,7 +3250,7 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -3247,8 +3258,8 @@ sides = ["client"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -3288,8 +3299,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3316,8 +3327,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3453,7 +3464,7 @@ fn run_fabric_client_uses_loader_main_class_and_libraries() {
     }
   }
 }]"#
-        .replace("file://REPO", &format!("file://{}", repo.display())),
+        .replace("file://REPO", &file_url(&repo)),
     )
     .expect("failed to write fabric metadata");
     let fake_java = metadata.join("fake-java-fabric-client");
@@ -3488,8 +3499,8 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
-    let fabric_url = format!("file://{}", fabric_metadata.display());
+    let manifest_url = file_url(&manifest);
+    let fabric_url = file_url(&fabric_metadata);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -3498,8 +3509,8 @@ sides = ["client"]
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             ("MODSTAGE_FABRIC_META_URL", &fabric_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -3523,8 +3534,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3648,8 +3659,8 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
-    let neoforge_url = format!("file://{}", neoforge_metadata.display());
+    let manifest_url = file_url(&manifest);
+    let neoforge_url = file_url(&neoforge_metadata);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -3658,8 +3669,8 @@ sides = ["server"]
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             ("MODSTAGE_NEOFORGE_META_URL", &neoforge_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -3683,8 +3694,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3825,8 +3836,8 @@ sha256 = "d47712cceb4c780603026e6325221c1bcff90679ebc076baa51c71ebe796717c"
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -3955,8 +3966,8 @@ server_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap"
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4118,8 +4129,8 @@ server_main_class = "net.minecraftforge.bootstrap.ForgeBootstrap"
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4240,8 +4251,8 @@ server_main_class = "net.neoforged.fml.startup.Client"
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4341,7 +4352,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -4349,8 +4360,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -4374,8 +4385,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4480,7 +4491,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -4488,8 +4499,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -4513,8 +4524,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4620,7 +4631,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -4628,8 +4639,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -4653,8 +4664,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4709,7 +4720,7 @@ sides = ["server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let data_home_str = data_home.to_str().expect("data path is not UTF-8");
     let cache_home_str = cache_home.to_str().expect("cache path is not UTF-8");
     let resolve = run_in_with_string_env(
@@ -4717,8 +4728,8 @@ sides = ["server"]
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
-            ("XDG_DATA_HOME", data_home_str),
-            ("XDG_CACHE_HOME", cache_home_str),
+            ("MODSTAGE_DATA_HOME", data_home_str),
+            ("MODSTAGE_CACHE_HOME", cache_home_str),
         ],
     );
     assert!(
@@ -4742,8 +4753,8 @@ sides = ["server"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4800,14 +4811,14 @@ sides = ["client"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let resolve = run_in_with_env(
         &["resolve", "client-ready-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", Path::new(&manifest_url)),
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -4831,8 +4842,8 @@ sides = ["client"]
         ],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(

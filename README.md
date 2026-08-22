@@ -179,6 +179,9 @@ Modstage keeps state in two places:
 | macOS | `~/Library/Application Support/modstage` | `~/Library/Caches/modstage` |
 | Windows | `%APPDATA%\modstage` | `%LOCALAPPDATA%\modstage\Cache` |
 
+`MODSTAGE_DATA_HOME` and `MODSTAGE_CACHE_HOME` override the platform base
+directories for isolated automation and disposable environments.
+
 Project state is scoped by project name plus a hash of the config root. Two projects with the same name do not collide.
 
 ### Client Runs
@@ -254,7 +257,7 @@ modstage run client example-fabric-26.1.2 --locked --timeout 120s
 
 | Workflow | Trigger | Behavior |
 | --- | --- | --- |
-| `check.yml` | `push`, `pull_request` | Runs `cargo test` on Linux |
+| `check.yml` | `push`, `pull_request` | Runs all Rust test targets on Linux and Windows |
 | `release.yml` | Manual `workflow_dispatch` | Tests, builds release binary, uploads `modstage-linux-x86_64.tar.gz` |
 
 Release publishing is manual. Linux is the only release target for now.

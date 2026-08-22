@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
+use support::{file_url, file_url_path};
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -119,8 +123,8 @@ fn default_mojang_manifest(root: &Path) -> String {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -129,11 +133,11 @@ fn default_mojang_manifest(root: &Path) -> String {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
-    format!("file://{}", manifest.display())
+    file_url(&manifest)
 }
 
 fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
@@ -197,18 +201,18 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let neoforge_url = format!("file://{}", neoforge_metadata.display());
+    let neoforge_url = file_url(&neoforge_metadata);
     let output = run_in_with_env(
         &["resolve", "neoforge-26.1.2"],
         &project,
         &[
             ("MODSTAGE_NEOFORGE_META_URL", &neoforge_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -288,18 +292,18 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", neoforge_manifest.display());
+    let manifest_url = file_url(&neoforge_manifest);
     let output = run_in_with_env(
         &["resolve", "neoforge-latest-26.1.2"],
         &project,
         &[
             ("MODSTAGE_NEOFORGE_MAVEN_METADATA_URL", &manifest_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -377,8 +381,8 @@ fn resolve_uses_pinned_neoforge_loader_version_without_metadata_override() {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -387,7 +391,7 @@ fn resolve_uses_pinned_neoforge_loader_version_without_metadata_override() {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -407,23 +411,23 @@ loader = "neoforge"
 loader_version = "26.1.2.22-beta"
 sides = ["client", "server"]
 "#,
-            metadata.display()
+            file_url_path(&metadata)
         ),
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let output = run_in_with_env(
         &["resolve", "neoforge-pinned-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -507,23 +511,23 @@ loader = "neoforge"
 loader_version = "latest"
 sides = ["client", "server"]
 "#,
-            repo.display()
+            file_url_path(&repo)
         ),
     )
     .expect("failed to write config");
 
-    let neoforge_url = format!("file://{}", neoforge_metadata.display());
+    let neoforge_url = file_url(&neoforge_metadata);
     let output = run_in_with_env(
         &["resolve", "neoforge-classpath-26.1.2"],
         &project,
         &[
             ("MODSTAGE_NEOFORGE_META_URL", &neoforge_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],

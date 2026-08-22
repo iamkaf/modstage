@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
+use support::{file_url, file_url_path};
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -37,14 +41,17 @@ fn temp_dir(name: &str) -> PathBuf {
     root
 }
 
+#[cfg(unix)]
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+#[cfg(unix)]
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+#[cfg(unix)]
 fn write_stored_jar(path: &Path, entries: &[(&str, &[u8])]) {
     let mut bytes = Vec::new();
     let mut central = Vec::new();
@@ -119,8 +126,8 @@ fn default_mojang_manifest(root: &Path) -> String {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -129,11 +136,11 @@ fn default_mojang_manifest(root: &Path) -> String {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
-    format!("file://{}", manifest.display())
+    file_url(&manifest)
 }
 
 fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
@@ -197,18 +204,18 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let forge_url = format!("file://{}", forge_metadata.display());
+    let forge_url = file_url(&forge_metadata);
     let output = run_in_with_env(
         &["resolve", "forge-26.1.2"],
         &project,
         &[
             ("MODSTAGE_FORGE_META_URL", &forge_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -284,18 +291,18 @@ sides = ["client", "server"]
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", forge_manifest.display());
+    let manifest_url = file_url(&forge_manifest);
     let output = run_in_with_env(
         &["resolve", "forge-latest-26.1.2"],
         &project,
         &[
             ("MODSTAGE_FORGE_MAVEN_METADATA_URL", &manifest_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -373,8 +380,8 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -383,7 +390,7 @@ fn resolve_uses_pinned_forge_loader_version_without_metadata_override() {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -403,23 +410,23 @@ loader = "forge"
 loader_version = "64.0.4"
 sides = ["client", "server"]
 "#,
-            metadata.display()
+            file_url_path(&metadata)
         ),
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let output = run_in_with_env(
         &["resolve", "forge-pinned-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -487,7 +494,7 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
     )
     .expect("failed to create Forge maven dir");
     fs::write(&bootstrap, b"bootstraplauncher").expect("failed to write bootstrap launcher jar");
-    let bootstrap_url = format!("file://{}", bootstrap.display());
+    let bootstrap_url = file_url(&bootstrap);
     let installer_version_json = format!(
         r#"{{
   "mainClass": "net.minecraftforge.bootstrap.ForgeBootstrap",
@@ -538,8 +545,8 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -548,7 +555,7 @@ fn resolve_adds_forge_installer_version_libraries_to_the_launch_classpath() {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
@@ -568,23 +575,23 @@ loader = "forge"
 loader_version = "26.1.2-64.0.4"
 sides = ["client", "server"]
 "#,
-            metadata.display()
+            file_url_path(&metadata)
         ),
     )
     .expect("failed to write config");
 
-    let manifest_url = format!("file://{}", manifest.display());
+    let manifest_url = file_url(&manifest);
     let output = run_in_with_env(
         &["resolve", "forge-profile-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MOJANG_MANIFEST_URL", &manifest_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],

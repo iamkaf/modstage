@@ -3,6 +3,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
+use support::{file_url, file_url_path};
+
+fn toml_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
 fn modstage() -> Command {
     Command::new(env!("CARGO_BIN_EXE_modstage"))
 }
@@ -12,8 +22,8 @@ fn run_in(args: &[&str], cwd: &Path) -> Output {
     command
         .args(args)
         .current_dir(cwd)
-        .env("XDG_DATA_HOME", cwd.join(".modstage-test-data"))
-        .env("XDG_CACHE_HOME", cwd.join(".modstage-test-cache"))
+        .env("MODSTAGE_DATA_HOME", cwd.join(".modstage-test-data"))
+        .env("MODSTAGE_CACHE_HOME", cwd.join(".modstage-test-cache"))
         .env("MODSTAGE_MOJANG_MANIFEST_URL", default_mojang_manifest(cwd));
     command
         .output()
@@ -64,8 +74,8 @@ fn default_mojang_manifest(root: &Path) -> String {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -74,11 +84,11 @@ fn default_mojang_manifest(root: &Path) -> String {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
-    format!("file://{}", manifest.display())
+    file_url(&manifest)
 }
 
 fn state_lock_path(root: &Path, project_name: &str, instance: &str) -> PathBuf {
@@ -330,7 +340,7 @@ fn resolve_preserves_repositories_and_mods_in_the_lockfile() {
 name = "resolve-mods"
 
 [repositories]
-kaf = "file://{}"
+kaf = "{}"
 fabric = "https://maven.fabricmc.net"
 
 [[instance]]
@@ -343,7 +353,7 @@ mods = [
   "maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2",
 ]
 "#,
-            repo.display()
+            file_url(&repo)
         ),
     )
     .expect("failed to write config");
@@ -367,7 +377,7 @@ mods = [
         r#"project = "resolve-mods""#,
         r#"instance = "liteminer-fabric-26.1.2""#,
         r#"loader = "vanilla""#,
-        &format!(r#"kaf = "file://{}""#, repo.display()),
+        &format!(r#"kaf = "{}""#, file_url(&repo)),
         r#"fabric = "https://maven.fabricmc.net""#,
         r#""maven:com.example:helper-fabric:0.1.0""#,
         r#""maven:com.iamkaf.liteminer:liteminer-fabric:3.1.0+26.1.2""#,
@@ -423,7 +433,7 @@ mods = [
     for expected in [
         "[[mod]]",
         r#"source = "./mods/example.jar""#,
-        &format!(r#"path = "{}""#, jar_path.display()),
+        &format!(r#"path = "{}""#, toml_path(&jar_path)),
         r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
     ] {
         assert!(
@@ -491,7 +501,7 @@ mods = [
         "[[mod]]",
         r#"source = "maven:com.example:example-mod:1.0.0""#,
         r#"repository = "mavenLocal""#,
-        &format!(r#"path = "{}""#, jar_path.display()),
+        &format!(r#"path = "{}""#, toml_path(&jar_path)),
         r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
     ] {
         assert!(
@@ -522,8 +532,8 @@ fn resolve_uses_ordered_file_maven_repositories_for_single_jar_mods() {
 name = "resolve-file-repo"
 
 [repositories]
-missing = "file://{}/missing"
-local = "file://{}"
+missing = "{}"
+local = "{}"
 
 [[instance]]
 name = "file-repo-26.1.2"
@@ -534,8 +544,8 @@ mods = [
   "maven:com.example:example-mod:1.0.0",
 ]
 "#,
-            project.display(),
-            repo.display()
+            file_url(&project.join("missing")),
+            file_url(&repo)
         ),
     )
     .expect("failed to write config");
@@ -560,7 +570,7 @@ mods = [
         "[[mod]]",
         r#"source = "maven:com.example:example-mod:1.0.0""#,
         r#"repository = "local""#,
-        &format!(r#"path = "{}""#, jar_path.display()),
+        &format!(r#"path = "{}""#, toml_path(&jar_path)),
         r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
     ] {
         assert!(
@@ -577,11 +587,12 @@ fn resolve_rejects_missing_maven_mod_artifacts() {
     let project = temp_project("resolve-missing-maven");
     fs::write(
         project.join("modstage.toml"),
-        r#"[project]
+        format!(
+            r#"[project]
 name = "resolve-missing-maven"
 
 [repositories]
-local = "file:///does/not/exist"
+local = "{}"
 
 [[instance]]
 name = "missing-maven-26.1.2"
@@ -592,6 +603,8 @@ mods = [
   "maven:com.example:missing-mod:1.0.0",
 ]
 "#,
+            file_url(&project.join("missing"))
+        ),
     )
     .expect("failed to write config");
 
@@ -662,11 +675,11 @@ mods = [
 fn run_in_with_env(args: &[&str], cwd: &Path, envs: &[(&str, &Path)]) -> Output {
     let mut command = modstage();
     command.args(args).current_dir(cwd);
-    if !envs.iter().any(|(key, _)| *key == "XDG_DATA_HOME") {
-        command.env("XDG_DATA_HOME", cwd.join(".modstage-test-data"));
+    if !envs.iter().any(|(key, _)| *key == "MODSTAGE_DATA_HOME") {
+        command.env("MODSTAGE_DATA_HOME", cwd.join(".modstage-test-data"));
     }
-    if !envs.iter().any(|(key, _)| *key == "XDG_CACHE_HOME") {
-        command.env("XDG_CACHE_HOME", cwd.join(".modstage-test-cache"));
+    if !envs.iter().any(|(key, _)| *key == "MODSTAGE_CACHE_HOME") {
+        command.env("MODSTAGE_CACHE_HOME", cwd.join(".modstage-test-cache"));
     }
     if !envs
         .iter()

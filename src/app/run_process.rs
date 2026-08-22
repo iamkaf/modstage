@@ -333,12 +333,11 @@ pub(super) fn parse_duration(value: &str) -> Result<Duration, String> {
     Err(format!("timeout `{value}` must use `ms` or `s`"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn keep_alive_server_is_not_stopped_at_readiness() {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
@@ -354,7 +353,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn client_supervision_finishes_after_minecraft_reports_shutdown() {
         let mut command = Command::new("sh");
         command

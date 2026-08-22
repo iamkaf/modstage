@@ -1,7 +1,12 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
+
+use support::{file_url, file_url_path};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -102,13 +107,22 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let data_home = temp.join("data");
     let cache_home = temp.join("cache");
     let archive = temp.join("zulu-jre.zip");
-    fs::write(&archive, b"abc").expect("failed to write fake java archive");
+    let archive_file = fs::File::create(&archive).expect("failed to create fake Java archive");
+    let mut zip = zip::ZipWriter::new(archive_file);
+    zip.start_file(
+        format!("zulu-test-jre/bin/{}", java_bin()),
+        zip::write::SimpleFileOptions::default(),
+    )
+    .expect("failed to start fake Java archive entry");
+    zip.write_all(b"runtime")
+        .expect("failed to write fake Java archive entry");
+    zip.finish().expect("failed to finish fake Java archive");
     let metadata = temp.join("azul.json");
     fs::write(
         &metadata,
         format!(
             r#"[{{"download_url":"file://{}","name":"zulu-test-jre.zip"}}]"#,
-            archive.display()
+            file_url_path(&archive)
         ),
     )
     .expect("failed to write fake Azul metadata");
@@ -116,16 +130,13 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let output = run_with_env(
         &["java", "install", "25"],
         &[
+            ("MODSTAGE_AZUL_METADATA_URL", &file_url(&metadata)),
             (
-                "MODSTAGE_AZUL_METADATA_URL",
-                &format!("file://{}", metadata.display()),
-            ),
-            (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -154,22 +165,29 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
         .join("java")
         .join("25")
         .join("runtime.toml");
+    let java = data_home
+        .join("modstage")
+        .join("java")
+        .join("25")
+        .join("zulu-test-jre")
+        .join("bin")
+        .join(java_bin());
     assert!(
         cached.is_file()
             && managed.is_file()
+            && java.is_file()
             && record.is_file()
             && stdout.contains("java archive:")
             && stdout.contains("managed java:")
-            && stdout.contains(
-                "sha256: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            ),
+            && stdout.contains("sha256:"),
         "java install should report durable managed runtime state\n{stdout}"
     );
     let record = fs::read_to_string(record).expect("runtime.toml should be readable");
     for expected in [
         r#"major = 25"#,
         r#"archive_name = "zulu-test-jre.zip""#,
-        r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+        "java = ",
+        "sha256 = ",
     ] {
         assert!(
             record.contains(expected),
@@ -177,9 +195,8 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
         );
     }
     assert_eq!(
-        fs::read(&managed).expect("managed archive should be readable"),
-        b"abc",
-        "managed Java archive should be durable outside the redownloadable cache"
+        fs::read(java).expect("managed Java should be readable"),
+        b"runtime"
     );
 
     fs::remove_dir_all(temp).expect("failed to remove temp dir");
@@ -215,11 +232,11 @@ fn java_install_can_register_an_existing_runtime_as_managed_java() {
         ],
         &[
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],

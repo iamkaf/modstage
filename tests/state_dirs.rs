@@ -54,8 +54,8 @@ sides = ["client", "server"]
         &["inspect", "config"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(
@@ -110,8 +110,8 @@ sides = ["client", "server"]
         &["clean", "cache"],
         &project,
         &[
-            ("XDG_DATA_HOME", &data_home),
-            ("XDG_CACHE_HOME", &cache_home),
+            ("MODSTAGE_DATA_HOME", &data_home),
+            ("MODSTAGE_CACHE_HOME", &cache_home),
         ],
     );
     assert!(

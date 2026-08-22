@@ -1,5 +1,8 @@
 use super::*;
-use std::sync::LazyLock;
+use std::sync::{
+    LazyLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 const HTTP_USER_AGENT: &str = concat!(
     "iamkaf/modstage/",
@@ -14,6 +17,8 @@ static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
         .build()
         .expect("HTTP client configuration should be valid")
 });
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn fetch_to_cache(
     url: &str,
@@ -48,7 +53,7 @@ fn fetch_to_cache_inner(
         return Ok(destination);
     }
 
-    if let Some(path) = url.strip_prefix("file://") {
+    if let Some(path) = file_url_to_path(url)? {
         fs::copy(path, &destination).map_err(|error| {
             format!("failed to copy {url} to {}: {error}", destination.display())
         })?;
@@ -65,8 +70,7 @@ fn fetch_to_cache_inner(
         let bytes = response
             .bytes()
             .map_err(|error| format!("failed to read response body from {url}: {error}"))?;
-        let temp_name = format!(".{}.{:?}.tmp", file_name, std::thread::current().id());
-        let temp_destination = destination.with_file_name(temp_name);
+        let temp_destination = temporary_destination(&destination)?;
         fs::write(&temp_destination, &bytes).map_err(|error| {
             format!(
                 "failed to write {} from {url}: {error}",
@@ -77,6 +81,9 @@ fn fetch_to_cache_inner(
             Ok(()) => return Ok(destination),
             Err(error) => {
                 let _ = fs::remove_file(&temp_destination);
+                if destination.is_file() {
+                    return Ok(destination);
+                }
                 return Err(format!(
                     "failed to move {} to {}: {error}",
                     temp_destination.display(),
@@ -87,6 +94,23 @@ fn fetch_to_cache_inner(
     }
 
     Err(format!("unsupported URL `{url}`"))
+}
+
+fn temporary_destination(destination: &Path) -> Result<PathBuf, String> {
+    let file_name = destination.file_name().ok_or_else(|| {
+        format!(
+            "cache destination has no filename: {}",
+            destination.display()
+        )
+    })?;
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp_name = format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        sequence
+    );
+    Ok(destination.with_file_name(temp_name))
 }
 
 fn cached_file_is_fresh(path: &Path, ttl: Duration) -> bool {
@@ -119,8 +143,10 @@ pub(super) fn resolve_maven_artifact(
                     url: None,
                 }));
             }
-        } else if let Some(root) = url.strip_prefix("file://") {
-            if let Some(path) = maven_artifact_under(PathBuf::from(root), coordinates) {
+        } else if url.starts_with("file:") {
+            let root =
+                file_url_to_path(url)?.ok_or_else(|| format!("unsupported file URL `{url}`"))?;
+            if let Some(path) = maven_artifact_under(root, coordinates) {
                 return Ok(Some(ResolvedMavenArtifact {
                     repository: name.clone(),
                     path,
@@ -152,10 +178,46 @@ pub(super) fn resolve_maven_artifact(
     )
 }
 
+fn file_url_to_path(value: &str) -> Result<Option<PathBuf>, String> {
+    if !value.starts_with("file:") {
+        return Ok(None);
+    }
+
+    let url =
+        url::Url::parse(value).map_err(|error| format!("invalid file URL `{value}`: {error}"))?;
+    url.to_file_path()
+        .map(Some)
+        .map_err(|()| format!("file URL `{value}` does not identify a local path"))
+}
+
 pub(super) fn maven_artifact_url(repository: &str, coordinates: &MavenCoordinates<'_>) -> String {
     format!(
         "{}/{}",
         repository.trim_end_matches('/'),
         coordinates.artifact_relative_path()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temporary_downloads_stay_beside_the_destination_and_are_unique() {
+        let destination = Path::new("cache").join("nested").join("artifact.jar");
+
+        let first = temporary_destination(&destination).unwrap();
+        let second = temporary_destination(&destination).unwrap();
+
+        assert_eq!(first.parent(), destination.parent());
+        assert_eq!(second.parent(), destination.parent());
+        assert_ne!(first, second);
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".artifact.jar.")
+        );
+    }
 }

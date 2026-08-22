@@ -801,12 +801,14 @@ name = "modstage"
 version = "0.6.0"
 dependencies = [
  "clap",
+ "dunce",
  "rayon",
  "reqwest",
  "serde",
  "serde_json",
  "sha1",
  "toml_edit",
+ "url",
  "zip",
 ]
 

@@ -14,7 +14,7 @@ impl LockedInstance {
             return Ok(None);
         }
 
-        let lock = fs::read_to_string(&lock_path)
+        let lock = fs::read_to_string(lock_path)
             .map_err(|error| format!("failed to read {}: {error}", lock_path.display()))?;
         let Some(block) = instance_block(&lock, instance) else {
             return Ok(None);

@@ -32,10 +32,7 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
         return register_existing_java(major, &java);
     }
     let metadata_url = azul_metadata_url(major)?;
-    let cache_dir = cache_home()?
-        .join("modstage")
-        .join("downloads")
-        .join("java");
+    let cache_dir = cache_dir()?.join("downloads").join("java");
     let metadata_path = fetch_to_cache(&metadata_url, &cache_dir, &format!("azul-{major}.json"))?;
     let metadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
@@ -47,10 +44,7 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
     let archive = fs::read(&archive_path)
         .map_err(|error| format!("failed to read {}: {error}", archive_path.display()))?;
     let sha256 = sha256_hex(&archive);
-    let install_dir = data_home()?
-        .join("modstage")
-        .join("java")
-        .join(major.to_string());
+    let install_dir = data_dir()?.join("java").join(major.to_string());
     fs::create_dir_all(&install_dir)
         .map_err(|error| format!("failed to create {}: {error}", install_dir.display()))?;
     let managed_archive = install_dir.join(&archive_name);
@@ -60,14 +54,16 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
             managed_archive.display()
         )
     })?;
+    let java = extract_managed_java(&managed_archive, &install_dir)?;
     fs::write(
         install_dir.join("runtime.toml"),
         format!(
-            "major = {major}\nmetadata_url = \"{}\"\ndownload_url = \"{}\"\narchive_name = \"{}\"\narchive = \"{}\"\nsha256 = \"{}\"\n",
+            "major = {major}\nmetadata_url = \"{}\"\ndownload_url = \"{}\"\narchive_name = \"{}\"\narchive = \"{}\"\njava = \"{}\"\nsha256 = \"{}\"\n",
             toml_escape(&metadata_url),
             toml_escape(&download_url),
             toml_escape(&archive_name),
             toml_escape(&managed_archive.display().to_string()),
+            toml_escape(&java.display().to_string()),
             sha256
         ),
     )
@@ -76,9 +72,89 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
     println!("java major: {major}");
     println!("java archive: {}", archive_path.display());
     println!("managed java: {}", install_dir.display());
+    println!("java: {}", java.display());
     println!("sha256: {sha256}");
 
     Ok(())
+}
+
+fn extract_managed_java(archive_path: &Path, install_dir: &Path) -> Result<PathBuf, String> {
+    let archive_file = fs::File::open(archive_path)
+        .map_err(|error| format!("failed to open {}: {error}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| {
+        format!(
+            "failed to read Java archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("failed to read Java archive entry {index}: {error}"))?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(format!(
+                "Java archive {} contains an unsafe path `{}`",
+                archive_path.display(),
+                entry.name()
+            ));
+        };
+        let output = install_dir.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output)
+                .map_err(|error| format!("failed to create {}: {error}", output.display()))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        let mut file = fs::File::create(&output)
+            .map_err(|error| format!("failed to create {}: {error}", output.display()))?;
+        std::io::copy(&mut entry, &mut file)
+            .map_err(|error| format!("failed to extract {}: {error}", output.display()))?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&output, fs::Permissions::from_mode(mode)).map_err(|error| {
+                format!("failed to set permissions on {}: {error}", output.display())
+            })?;
+        }
+    }
+
+    find_managed_java(install_dir)?.ok_or_else(|| {
+        format!(
+            "Java archive {} does not contain bin/{}",
+            archive_path.display(),
+            java_bin()
+        )
+    })
+}
+
+fn find_managed_java(root: &Path) -> Result<Option<PathBuf>, String> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read {}: {error}", directory.display()))?;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries.into_iter().rev() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name().is_some_and(|name| name == java_bin())
+                && path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == "bin")
+            {
+                return Ok(Some(path));
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn register_existing_java(major: u32, java: &Path) -> Result<(), String> {
@@ -91,10 +167,7 @@ pub(super) fn register_existing_java(major: u32, java: &Path) -> Result<(), Stri
         ));
     }
 
-    let install_dir = data_home()?
-        .join("modstage")
-        .join("java")
-        .join(major.to_string());
+    let install_dir = data_dir()?.join("java").join(major.to_string());
     fs::create_dir_all(&install_dir)
         .map_err(|error| format!("failed to create {}: {error}", install_dir.display()))?;
     fs::write(
@@ -147,10 +220,7 @@ pub(super) fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String>
 }
 
 pub(super) fn managed_java_for_major(major: u32) -> Result<Option<PathBuf>, String> {
-    let install_dir = data_home()?
-        .join("modstage")
-        .join("java")
-        .join(major.to_string());
+    let install_dir = data_dir()?.join("java").join(major.to_string());
     let record_path = install_dir.join("runtime.toml");
     if record_path.is_file() {
         let record = fs::read_to_string(&record_path)

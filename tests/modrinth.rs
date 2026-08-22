@@ -3,6 +3,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
+
+use support::{file_url, file_url_path};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
@@ -59,8 +63,8 @@ fn default_mojang_manifest(root: &Path) -> String {
     "server": {{ "url": "file://{}" }}
   }}
 }}"#,
-            client.display(),
-            server.display()
+            file_url_path(&client),
+            file_url_path(&server)
         ),
     )
     .expect("failed to write version json");
@@ -69,11 +73,11 @@ fn default_mojang_manifest(root: &Path) -> String {
         &manifest,
         format!(
             r#"{{ "versions": [{{ "id": "26.1.2", "url": "file://{}" }}] }}"#,
-            version_json.display()
+            file_url_path(&version_json)
         ),
     )
     .expect("failed to write manifest");
-    format!("file://{}", manifest.display())
+    file_url(&manifest)
 }
 
 fn state_lock_path(data_home: &Path, root: &Path, project_name: &str, instance: &str) -> PathBuf {
@@ -171,9 +175,9 @@ fn modrinth_pack_resolve_and_stage_preserve_sides_overrides_and_locked_restorati
   ],
   "dependencies": {{"minecraft": "26.1.2"}}
 }}"#,
-        common.display(),
-        client.display(),
-        server.display()
+        file_url_path(&common),
+        file_url_path(&client),
+        file_url_path(&server)
     );
     write_pack(
         &pack,
@@ -198,7 +202,7 @@ fn modrinth_pack_resolve_and_stage_preserve_sides_overrides_and_locked_restorati
     "hashes": {{"sha1": "pack"}}
   }}]
 }}]"#,
-            pack.display()
+            file_url_path(&pack)
         ),
     )
     .expect("failed to write pack metadata");
@@ -216,18 +220,18 @@ modrinth_pack = "modrinth:sample-pack:1.0.0"
 "#,
     )
     .expect("failed to write config");
-    let versions_url = format!("file://{}", versions.display());
+    let versions_url = file_url(&versions);
     let envs = [
         (
             "MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL",
             versions_url.as_str(),
         ),
         (
-            "XDG_DATA_HOME",
+            "MODSTAGE_DATA_HOME",
             data_home.to_str().expect("data path is not UTF-8"),
         ),
         (
-            "XDG_CACHE_HOME",
+            "MODSTAGE_CACHE_HOME",
             cache_home.to_str().expect("cache path is not UTF-8"),
         ),
     ];
@@ -336,7 +340,7 @@ fn resolve_downloads_direct_modrinth_mod_file_into_the_lockfile() {
     }}
   }}]
 }}]"#,
-            jar.display()
+            file_url_path(&jar)
         ),
     )
     .expect("failed to write Modrinth versions metadata");
@@ -357,18 +361,18 @@ mods = [
     )
     .expect("failed to write config");
 
-    let versions_url = format!("file://{}", versions.display());
+    let versions_url = file_url(&versions);
     let output = run_in_with_env(
         &["resolve", "modrinth-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -397,7 +401,7 @@ mods = [
         r#"version_id = "sample-version""#,
         r#"version_number = "1.0.0""#,
         r#"filename = "sample-mod-1.0.0.jar""#,
-        &format!(r#"url = "file://{}""#, jar.display()),
+        &format!(r#"url = "{}""#, file_url(&jar)),
         r#"sha1 = "a9993e364706816aba3e25717850c26c9cd0d89d""#,
         r#"sha512 = "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f""#,
         r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
@@ -453,8 +457,8 @@ fn resolve_honors_a_pinned_modrinth_version_source() {
     "hashes": {{"sha1": "a9993e364706816aba3e25717850c26c9cd0d89d"}}
   }}]
 }}]"#,
-            old_jar.display(),
-            pinned_jar.display()
+            file_url_path(&old_jar),
+            file_url_path(&pinned_jar)
         ),
     )
     .expect("failed to write Modrinth versions metadata");
@@ -475,18 +479,18 @@ mods = [
     )
     .expect("failed to write config");
 
-    let versions_url = format!("file://{}", versions.display());
+    let versions_url = file_url(&versions);
     let output = run_in_with_env(
         &["resolve", "modrinth-pinned-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -513,7 +517,7 @@ mods = [
         r#"version_id = "pinned-version""#,
         r#"version_number = "2.0.0""#,
         r#"filename = "sample-mod-2.0.0.jar""#,
-        &format!(r#"url = "file://{}""#, pinned_jar.display()),
+        &format!(r#"url = "{}""#, file_url(&pinned_jar)),
         r#"sha1 = "a9993e364706816aba3e25717850c26c9cd0d89d""#,
         r#"sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
     ] {
@@ -572,8 +576,8 @@ fn resolve_treats_explicit_modrinth_latest_as_the_first_compatible_version() {
     "hashes": {{"sha1": "c00dbbc9dadfbe1e232e93a729dd4752fade0abf"}}
   }}]
 }}]"#,
-            latest_jar.display(),
-            older_jar.display()
+            file_url_path(&latest_jar),
+            file_url_path(&older_jar)
         ),
     )
     .expect("failed to write Modrinth versions metadata");
@@ -594,18 +598,18 @@ mods = [
     )
     .expect("failed to write config");
 
-    let versions_url = format!("file://{}", versions.display());
+    let versions_url = file_url(&versions);
     let output = run_in_with_env(
         &["resolve", "modrinth-latest-26.1.2"],
         &project,
         &[
             ("MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL", &versions_url),
             (
-                "XDG_DATA_HOME",
+                "MODSTAGE_DATA_HOME",
                 data_home.to_str().expect("data path is not UTF-8"),
             ),
             (
-                "XDG_CACHE_HOME",
+                "MODSTAGE_CACHE_HOME",
                 cache_home.to_str().expect("cache path is not UTF-8"),
             ),
         ],
@@ -672,7 +676,7 @@ fn resolve_reuses_cached_modrinth_version_metadata() {
     "hashes": {{"sha1": "a9993e364706816aba3e25717850c26c9cd0d89d"}}
   }}]
 }}]"#,
-            jar.display()
+            file_url_path(&jar)
         ),
     )
     .expect("failed to write Modrinth versions metadata");
@@ -693,18 +697,18 @@ mods = [
     )
     .expect("failed to write config");
 
-    let versions_url = format!("file://{}", versions.display());
+    let versions_url = file_url(&versions);
     let envs = [
         (
             "MODSTAGE_MODRINTH_PROJECT_VERSIONS_URL",
             versions_url.as_str(),
         ),
         (
-            "XDG_DATA_HOME",
+            "MODSTAGE_DATA_HOME",
             data_home.to_str().expect("data path is not UTF-8"),
         ),
         (
-            "XDG_CACHE_HOME",
+            "MODSTAGE_CACHE_HOME",
             cache_home.to_str().expect("cache path is not UTF-8"),
         ),
     ];

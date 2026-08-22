@@ -227,8 +227,7 @@ fn resolve_mod_source(
     pack_projects: &std::collections::HashSet<String>,
 ) -> Result<Vec<ResolvedMod>, String> {
     if let Some(path) = local_mod_path(config_root, source) {
-        let path = path
-            .canonicalize()
+        let path = dunce::canonicalize(&path)
             .map_err(|error| format!("failed to resolve local mod {}: {error}", path.display()))?;
         let bytes = fs::read(&path)
             .map_err(|error| format!("failed to read local mod {}: {error}", path.display()))?;
@@ -256,7 +255,7 @@ fn resolve_mod_source(
             ));
         };
         let raw_path = artifact.path;
-        let path = raw_path.canonicalize().map_err(|error| {
+        let path = dunce::canonicalize(&raw_path).map_err(|error| {
             format!(
                 "failed to resolve Maven artifact {}: {error}",
                 raw_path.display()
@@ -307,7 +306,7 @@ pub(super) fn resolved_maven_library_artifact(
         return Ok(None);
     };
     let raw_path = artifact.path;
-    let path = raw_path.canonicalize().map_err(|error| {
+    let path = dunce::canonicalize(&raw_path).map_err(|error| {
         format!(
             "failed to resolve Maven artifact {}: {error}",
             raw_path.display()

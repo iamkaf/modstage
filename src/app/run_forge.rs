@@ -55,7 +55,6 @@ impl<'a> InstallerRuntime<'a> {
         prepare_forge_client_artifact(
             self.config,
             self.instance,
-            self.root,
             self.lock_path,
             self.dirs,
             game_dir,
@@ -72,7 +71,6 @@ impl<'a> InstallerRuntime<'a> {
 pub(super) fn prepare_forge_client_artifact(
     config: &Config,
     instance: &Instance,
-    _root: &Path,
     lock_path: &Path,
     dirs: &StateDirs,
     game_dir: &Path,
