@@ -26,8 +26,14 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     } = request;
     let dirs = StateDirs::for_project(&config.project_name, root)?;
     let cache_dir = dirs.cache.join("downloads").join("mojang");
-    let artifact_name = format!("{side}.jar");
-    let artifact = fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?;
+    // One file per version, so runs of different versions can't overwrite each other's jar.
+    let artifact_name = format!("{}-{side}.jar", instance.minecraft);
+    let cached = cache_dir.join(&artifact_name);
+    let artifact = if locked_artifact_is_cached(lock_path, &instance.name, side, &cached)? {
+        cached
+    } else {
+        fetch_to_cache(artifact_url, &cache_dir, &artifact_name)?
+    };
     verify_locked_artifact_hash(lock_path, &instance.name, side, &artifact)?;
     let main_class = locked_main_class(lock_path, &instance.name, side)?;
     let java = selected_java(lock_path, instance, options)?;
@@ -245,7 +251,11 @@ pub(super) fn loader_server_artifact(artifact: &Path, cache_dir: &Path) -> Resul
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
-    fs::write(&destination, bytes)
+    // Runs of the same version extract the same jar; write it whole so none reads a partial one.
+    let staging = destination.with_extension(format!("jar.{}", std::process::id()));
+    fs::write(&staging, bytes)
+        .map_err(|error| format!("failed to write {}: {error}", staging.display()))?;
+    fs::rename(&staging, &destination)
         .map_err(|error| format!("failed to write {}: {error}", destination.display()))?;
 
     Ok(destination)
