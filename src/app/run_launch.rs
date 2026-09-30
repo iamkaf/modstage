@@ -42,9 +42,16 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
         for arg in forge_launch.args {
             launch_plan.arg(&mut command, arg);
         }
-    } else if let Some(main_class) = main_class {
+    } else if let Some(mut main_class) = main_class {
         if side == "server" {
             launch_artifact = loader_server_artifact(&artifact, &cache_dir)?;
+            // Vanilla locks only record the version's client main class. The server jar
+            // names its own entry point.
+            if locked_side_main_class(lock_path, &instance.name, side)?.is_none()
+                && let Some(server_main_class) = jar_main_class(&launch_artifact)?
+            {
+                main_class = server_main_class;
+            }
         }
         for arg in locked_arguments(lock_path, &instance.name, "jvm")? {
             let arg = expand_launch_argument(&arg, &cache_dir, game_dir);
@@ -200,6 +207,21 @@ pub(super) fn launch_minecraft_instance(request: LaunchRequest<'_>) -> Result<Ru
     })
 }
 
+/// The `Main-Class` a jar's manifest declares, if any.
+fn jar_main_class(jar: &Path) -> Result<Option<String>, String> {
+    Ok(jar_entry_text(jar, &["META-INF/MANIFEST.MF"])?
+        .as_deref()
+        .and_then(manifest_main_class))
+}
+
+fn manifest_main_class(manifest: &str) -> Option<String> {
+    manifest.lines().find_map(|line| {
+        line.strip_prefix("Main-Class:")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
 pub(super) fn loader_server_artifact(artifact: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
     let Some(versions_list) = jar_entry_text(artifact, &["META-INF/versions.list"])? else {
         return Ok(artifact.to_path_buf());
@@ -314,4 +336,19 @@ pub(super) fn launch_game_arguments(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::manifest_main_class;
+
+    #[test]
+    fn reads_the_main_class_a_manifest_declares() {
+        let manifest = "Manifest-Version: 1.0\r\nMain-Class: net.minecraft.server.Main\r\n\r\n";
+        assert_eq!(
+            manifest_main_class(manifest).as_deref(),
+            Some("net.minecraft.server.Main")
+        );
+        assert_eq!(manifest_main_class("Manifest-Version: 1.0\n"), None);
+    }
 }

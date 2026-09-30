@@ -57,8 +57,13 @@ impl LockedInstance {
     }
 
     pub(super) fn main_class(&self, side: &str) -> Option<String> {
-        let side_key = format!("{side}_main_class");
-        self.value(&side_key).or_else(|| self.value("main_class"))
+        self.side_main_class(side)
+            .or_else(|| self.value("main_class"))
+    }
+
+    /// The main class locked for one side only, without the shared fallback.
+    pub(super) fn side_main_class(&self, side: &str) -> Option<String> {
+        self.value(&format!("{side}_main_class"))
     }
 
     pub(super) fn java_major(&self) -> Result<Option<u32>, String> {
@@ -480,6 +485,14 @@ pub(super) fn locked_main_class(
     side: &str,
 ) -> Result<Option<String>, String> {
     Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.main_class(side)))
+}
+
+pub(super) fn locked_side_main_class(
+    lock_path: &Path,
+    instance: &str,
+    side: &str,
+) -> Result<Option<String>, String> {
+    Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.side_main_class(side)))
 }
 
 pub(super) fn locked_java_major(lock_path: &Path, instance: &str) -> Result<Option<u32>, String> {
