@@ -293,6 +293,20 @@ fn restore_pack_override(
     Ok(output)
 }
 
+/// Whether `artifact` is already the file the lock pins, so it needn't be downloaded again.
+pub(super) fn locked_artifact_is_cached(
+    lock_path: &Path,
+    instance: &str,
+    side: &str,
+    artifact: &Path,
+) -> Result<bool, String> {
+    let key = format!("{side}_sha256");
+    let Some(expected) = locked_value(lock_path, instance, &key)? else {
+        return Ok(false);
+    };
+    Ok(fs::read(artifact).is_ok_and(|bytes| sha256_hex(&bytes) == expected))
+}
+
 pub(super) fn verify_locked_artifact_hash(
     lock_path: &Path,
     instance: &str,

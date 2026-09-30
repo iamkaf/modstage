@@ -1235,7 +1235,17 @@ sides = ["server"]
         String::from_utf8_lossy(&resolve.stdout),
         String::from_utf8_lossy(&resolve.stderr)
     );
+    // Run reuses the cached jar while it matches the lock, so change both copies.
     fs::write(&server, b"changed-server").expect("failed to mutate server jar after resolve");
+    fs::write(
+        cache_home
+            .join("modstage")
+            .join("downloads")
+            .join("mojang")
+            .join("26.1.2-server.jar"),
+        b"changed-server",
+    )
+    .expect("failed to mutate cached server jar after resolve");
 
     let fake_java_str = fake_java.to_str().expect("fake java path is not UTF-8");
     let run = run_in_with_env(
@@ -1409,6 +1419,12 @@ sides = ["server"]
             && java_args.contains("server.jar")
             && java_args.contains("nogui"),
         "server launch should execute java -jar <server.jar> nogui\n{java_args}"
+    );
+    // Each version keeps its own cached jar, so parallel runs of other versions can't
+    // replace it mid-launch.
+    assert!(
+        java_args.contains("26.1.2-server.jar"),
+        "server launch should use the jar cached for its version\n{java_args}"
     );
 
     let reports_root = data_home.join("modstage").join("runs");
