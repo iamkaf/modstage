@@ -118,29 +118,54 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
         .expect("failed to write fake Java archive entry");
     zip.finish().expect("failed to finish fake Java archive");
     let metadata = temp.join("azul.json");
-    fs::write(
-        &metadata,
-        format!(
-            r#"[{{"download_url":"file://{}","name":"zulu-test-jre.zip"}}]"#,
-            file_url_path(&archive)
-        ),
-    )
-    .expect("failed to write fake Azul metadata");
+    let write_metadata = |sha256: &str| {
+        fs::write(
+            &metadata,
+            format!(
+                r#"[{{"download_url":"file://{}","name":"zulu-test-jre.zip","sha256_hash":"{sha256}"}}]"#,
+                file_url_path(&archive)
+            ),
+        )
+        .expect("failed to write fake Azul metadata");
+    };
+    let install = || {
+        run_with_env(
+            &["java", "install", "25"],
+            &[
+                ("MODSTAGE_AZUL_METADATA_URL", &file_url(&metadata)),
+                (
+                    "MODSTAGE_DATA_HOME",
+                    data_home.to_str().expect("data path is not UTF-8"),
+                ),
+                (
+                    "MODSTAGE_CACHE_HOME",
+                    cache_home.to_str().expect("cache path is not UTF-8"),
+                ),
+            ],
+        )
+    };
 
-    let output = run_with_env(
-        &["java", "install", "25"],
-        &[
-            ("MODSTAGE_AZUL_METADATA_URL", &file_url(&metadata)),
-            (
-                "MODSTAGE_DATA_HOME",
-                data_home.to_str().expect("data path is not UTF-8"),
-            ),
-            (
-                "MODSTAGE_CACHE_HOME",
-                cache_home.to_str().expect("cache path is not UTF-8"),
-            ),
-        ],
+    let wrong = "0".repeat(64);
+    write_metadata(&wrong);
+    let rejected = install();
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        !rejected.status.success() && stderr.contains(&format!("but Azul published {wrong}")),
+        "java install should reject an archive whose hash differs from Azul's\n{stderr}"
     );
+    assert!(
+        !data_home.join("modstage").join("java").join("25").exists(),
+        "a rejected archive should not be installed"
+    );
+    let actual = stderr
+        .split("has SHA-256 ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .expect("the error should name the archive's hash")
+        .to_string();
+
+    write_metadata(&actual);
+    let output = install();
 
     assert!(
         output.status.success(),

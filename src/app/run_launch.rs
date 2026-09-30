@@ -313,13 +313,22 @@ pub(super) fn selected_java(
         return Ok(java.clone());
     }
 
-    if let Some(major) = locked_java_major(lock_path, &instance.name)?
-        && let Some(java) = managed_java_for_major(major)?
-    {
+    let system = PathBuf::from(java_bin());
+    let Some(major) = locked_java_major(lock_path, &instance.name)? else {
+        return Ok(system);
+    };
+    if let Some(java) = managed_java_for_major(major)? {
         return Ok(java);
     }
-
-    Ok(PathBuf::from(java_bin()))
+    // The system Java can run versions that need an older one, but not newer ones.
+    if inspect_java(&system).is_ok_and(|info| info.major >= major) {
+        return Ok(system);
+    }
+    println!(
+        "installing Java {major}, which Minecraft {} needs",
+        instance.minecraft
+    );
+    Ok(install_managed_java(major)?.java)
 }
 
 pub(super) fn launch_game_arguments(
