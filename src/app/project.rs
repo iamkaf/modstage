@@ -94,7 +94,9 @@ fn validate_instance_path_token(instance: &str) -> Result<(), String> {
 
 pub(super) fn project_config_path(explicit_config: Option<PathBuf>) -> Result<PathBuf, String> {
     match explicit_config {
-        Some(path) => Ok(path),
+        // Instance state is keyed by the config's directory, so relative and absolute
+        // spellings of one config must resolve to the same path.
+        Some(path) => Ok(fs::canonicalize(&path).unwrap_or(path)),
         None => discover_config(&env::current_dir().map_err(|error| error.to_string())?)?
             .ok_or_else(|| "no modstage.toml found; run `modstage init`".to_string()),
     }

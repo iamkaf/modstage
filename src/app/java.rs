@@ -31,6 +31,33 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
     if let Some(java) = parse_java_arg(args)? {
         return register_existing_java(major, &java);
     }
+    let install_dir = data_dir()?.join("java").join(major.to_string());
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir)
+            .map_err(|error| format!("failed to remove {}: {error}", install_dir.display()))?;
+    }
+    let installed = install_managed_java(major)?;
+
+    println!("java major: {major}");
+    println!("java archive: {}", installed.archive.display());
+    println!("managed java: {}", install_dir.display());
+    println!("java: {}", installed.java.display());
+    println!("sha256: {}", installed.sha256);
+
+    Ok(())
+}
+
+pub(super) struct InstalledJava {
+    /// The downloaded archive in the cache.
+    pub(super) archive: PathBuf,
+    pub(super) java: PathBuf,
+    pub(super) sha256: String,
+}
+
+/// Downloads Azul's JRE for `major`, checks it against the SHA-256 Azul publishes, and
+/// installs it as the managed runtime for that major. The runtime is prepared in a staging
+/// directory and moved into place, so runs installing the same Java at once can't collide.
+pub(super) fn install_managed_java(major: u32) -> Result<InstalledJava, String> {
     let metadata_url = azul_metadata_url(major)?;
     let cache_dir = cache_dir()?.join("downloads").join("java");
     let metadata_path = fetch_to_cache(&metadata_url, &cache_dir, &format!("azul-{major}.json"))?;
@@ -38,44 +65,100 @@ pub(super) fn java_install(major: &str, args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
     let download_url = json_string(&metadata, "download_url")
         .ok_or_else(|| "Azul metadata did not include download_url".to_string())?;
+    let expected_sha256 = json_string(&metadata, "sha256_hash")
+        .ok_or_else(|| "Azul metadata did not include sha256_hash".to_string())?;
     let archive_name =
         json_string(&metadata, "name").unwrap_or_else(|| format!("zulu-java-{major}.zip"));
     let archive_path = fetch_to_cache(&download_url, &cache_dir, &archive_name)?;
     let archive = fs::read(&archive_path)
         .map_err(|error| format!("failed to read {}: {error}", archive_path.display()))?;
     let sha256 = sha256_hex(&archive);
-    let install_dir = data_dir()?.join("java").join(major.to_string());
-    fs::create_dir_all(&install_dir)
-        .map_err(|error| format!("failed to create {}: {error}", install_dir.display()))?;
-    let managed_archive = install_dir.join(&archive_name);
-    fs::copy(&archive_path, &managed_archive).map_err(|error| {
+    if !sha256.eq_ignore_ascii_case(&expected_sha256) {
+        let _ = fs::remove_file(&archive_path);
+        return Err(format!(
+            "{archive_name} has SHA-256 {sha256}, but Azul published {expected_sha256}"
+        ));
+    }
+
+    let java_root = data_dir()?.join("java");
+    let install_dir = java_root.join(major.to_string());
+    let staging = java_root.join(format!(".{major}-{}", std::process::id()));
+    let result = stage_managed_java(
+        major,
+        &StagedJava {
+            archive_path: &archive_path,
+            archive_name: &archive_name,
+            metadata_url: &metadata_url,
+            download_url: &download_url,
+            sha256: &sha256,
+        },
+        &staging,
+        &install_dir,
+    )
+    .and_then(|java| match fs::rename(&staging, &install_dir) {
+        Ok(()) => Ok(java),
+        // Another run installed this Java first.
+        Err(_) => managed_java_for_major(major)?
+            .ok_or_else(|| format!("failed to move managed Java into {}", install_dir.display())),
+    });
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    Ok(InstalledJava {
+        archive: archive_path,
+        java: result?,
+        sha256,
+    })
+}
+
+struct StagedJava<'a> {
+    archive_path: &'a Path,
+    archive_name: &'a str,
+    metadata_url: &'a str,
+    download_url: &'a str,
+    sha256: &'a str,
+}
+
+/// Extracts the runtime into `staging` and records it with the paths it will have once
+/// `staging` becomes `install_dir`. Returns the final path of its `java`.
+fn stage_managed_java(
+    major: u32,
+    staged: &StagedJava<'_>,
+    staging: &Path,
+    install_dir: &Path,
+) -> Result<PathBuf, String> {
+    if staging.exists() {
+        fs::remove_dir_all(staging)
+            .map_err(|error| format!("failed to remove {}: {error}", staging.display()))?;
+    }
+    fs::create_dir_all(staging)
+        .map_err(|error| format!("failed to create {}: {error}", staging.display()))?;
+    fs::copy(staged.archive_path, staging.join(staged.archive_name)).map_err(|error| {
         format!(
             "failed to copy Java archive to {}: {error}",
-            managed_archive.display()
+            staging.display()
         )
     })?;
-    let java = extract_managed_java(&managed_archive, &install_dir)?;
+    let java = extract_managed_java(staged.archive_path, staging)?;
+    let java = install_dir.join(
+        java.strip_prefix(staging)
+            .map_err(|_| format!("{} is outside {}", java.display(), staging.display()))?,
+    );
     fs::write(
-        install_dir.join("runtime.toml"),
+        staging.join("runtime.toml"),
         format!(
             "major = {major}\nmetadata_url = \"{}\"\ndownload_url = \"{}\"\narchive_name = \"{}\"\narchive = \"{}\"\njava = \"{}\"\nsha256 = \"{}\"\n",
-            toml_escape(&metadata_url),
-            toml_escape(&download_url),
-            toml_escape(&archive_name),
-            toml_escape(&managed_archive.display().to_string()),
+            toml_escape(staged.metadata_url),
+            toml_escape(staged.download_url),
+            toml_escape(staged.archive_name),
+            toml_escape(&install_dir.join(staged.archive_name).display().to_string()),
             toml_escape(&java.display().to_string()),
-            sha256
+            staged.sha256
         ),
     )
     .map_err(|error| format!("failed to write managed Java record: {error}"))?;
-
-    println!("java major: {major}");
-    println!("java archive: {}", archive_path.display());
-    println!("managed java: {}", install_dir.display());
-    println!("java: {}", java.display());
-    println!("sha256: {sha256}");
-
-    Ok(())
+    Ok(java)
 }
 
 fn extract_managed_java(archive_path: &Path, install_dir: &Path) -> Result<PathBuf, String> {
@@ -195,7 +278,7 @@ pub(super) fn azul_metadata_url(major: u32) -> Result<String, String> {
     }
 
     Ok(format!(
-        "https://api.azul.com/metadata/v1/zulu/packages?arch={}&java_version={major}&os={}&archive_type=zip&javafx_bundled=false&java_package_type=jre&page_size=1",
+        "https://api.azul.com/metadata/v1/zulu/packages?arch={}&java_version={major}&os={}&archive_type=zip&javafx_bundled=false&java_package_type=jre&page_size=1&include_fields=sha256_hash",
         env::consts::ARCH,
         env::consts::OS
     ))
@@ -349,7 +432,7 @@ pub(super) fn print_java_info(java: &Path, info: &JavaInfo) {
 
 pub(super) struct JavaInfo {
     version: String,
-    major: u32,
+    pub(super) major: u32,
     arch: String,
 }
 

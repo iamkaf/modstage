@@ -151,7 +151,7 @@ in the instance lock.
 | `modstage clean instance <instance> [--side <client\|server>]` | Remove durable staged state |
 | `modstage clean cache` | Remove redownloadable cache data |
 | `modstage java list` | List discovered and registered Java runtimes |
-| `modstage java install <major>` | Register or install a managed Java runtime |
+| `modstage java install <major>` | Register or install a managed Java runtime, checked against Azul's published SHA-256 |
 | `modstage java doctor` | Validate Java selection |
 
 Global option:
@@ -168,6 +168,10 @@ Global option:
 | `--keep-alive` | Leave a ready server running until timeout |
 | `--java <path>` | Use an explicit Java executable |
 | `--timeout <duration>` | Bound the launch, for example `120s` |
+
+Without `--java`, `run` uses the managed runtime for the Java version Minecraft asks for.
+When there isn't one, it uses `java` on `PATH` if that is new enough, and otherwise
+installs the managed runtime first.
 
 ### Runtime Behavior
 
