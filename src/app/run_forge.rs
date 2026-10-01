@@ -102,9 +102,9 @@ pub(super) fn prepare_forge_client_artifact(
     let Some(profile) = jar_entry_text(&installer.path, &["install_profile.json"])? else {
         return Ok(None);
     };
-    let Some(processor) = forge_client_processor(&profile) else {
+    if !has_client_processor(&profile)? {
         return Ok(None);
-    };
+    }
     let library_dir = cache_dir.join("mojang").join("libraries");
     let binpatch = cache_dir.join("mojang").join("forge").join(format!(
         "{}-{}-client.lzma",
@@ -133,32 +133,13 @@ pub(super) fn prepare_forge_client_artifact(
         ensure_neoforge_patched_manifest(&instance.loader, java, &patched)?;
         return Ok(Some(patched));
     }
-    let Some(processor_coordinate) = json_string(processor, "jar") else {
-        return Ok(None);
-    };
-    let processor_path =
-        resolve_processor_artifact(&repositories, &maven_cache, &processor_coordinate)?;
-    let mut classpath = Vec::new();
-    for coordinate in json_string_array(processor, "classpath").unwrap_or_default() {
-        classpath.push(resolve_processor_artifact(
-            &repositories,
-            &maven_cache,
-            &coordinate,
-        )?);
-    }
-    classpath.push(processor_path.clone());
-    let main_class = jar_manifest_main_class(&processor_path)?;
     if let Some(parent) = patched.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
-
-    let processor_args = forge_processor_args(ForgeProcessorArgs {
-        processor,
-        repositories: &repositories,
-        maven_cache: &maven_cache,
-        library_dir: &library_dir,
+    let data = processor_data(ProcessorPaths {
         profile: &profile,
+        library_dir: &library_dir,
         game_dir,
         minecraft_artifact,
         patched: &patched,
@@ -166,30 +147,58 @@ pub(super) fn prepare_forge_client_artifact(
         installer: &installer.path,
         minecraft_version: &instance.minecraft,
     })?;
-    let mut processor_command = Command::new(java);
-    processor_command
-        .arg("-cp")
-        .arg(join_classpath(&classpath))
-        .arg(main_class)
-        .args(processor_args);
-    let processor_output =
-        run_process_with_timeout(&mut processor_command, None).map_err(|error| {
-            format!(
-                "failed to run Forge client processor {}: {error}",
-                java.display()
-            )
-        })?;
-    print!("{}", String::from_utf8_lossy(&processor_output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&processor_output.stderr));
-    if !processor_output.status.success() {
-        return Err(format!(
-            "Forge client processor failed with exit code {}",
-            processor_output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        ));
+    // Run every client-side processor in order. Obfuscated lines chain several: 1.21.11 downloads the
+    // Mojang mappings, renames the jar with them, and only then patches it.
+    for planned in client_processor_plan(&profile, &data)? {
+        let processor_path = resolve_processor_artifact(&repositories, &maven_cache, &planned.jar)?;
+        let mut classpath = Vec::new();
+        for coordinate in &planned.classpath {
+            classpath.push(resolve_processor_artifact(
+                &repositories,
+                &maven_cache,
+                coordinate,
+            )?);
+        }
+        classpath.push(processor_path.clone());
+        let main_class = jar_manifest_main_class(&processor_path)?;
+        let mut args = Vec::new();
+        for arg in planned.args {
+            args.push(match arg {
+                ProcessorArg::Literal(value) => value,
+                ProcessorArg::Artifact(coordinate) => {
+                    resolve_processor_artifact(&repositories, &maven_cache, &coordinate)?
+                        .display()
+                        .to_string()
+                }
+            });
+        }
+        let mut processor_command = Command::new(java);
+        processor_command
+            .arg("-cp")
+            .arg(join_classpath(&classpath))
+            .arg(main_class)
+            .args(args);
+        let processor_output =
+            run_process_with_timeout(&mut processor_command, None).map_err(|error| {
+                format!(
+                    "failed to run Forge client processor {} ({}): {error}",
+                    planned.jar,
+                    java.display()
+                )
+            })?;
+        print!("{}", String::from_utf8_lossy(&processor_output.stdout));
+        eprint!("{}", String::from_utf8_lossy(&processor_output.stderr));
+        if !processor_output.status.success() {
+            return Err(format!(
+                "Forge client processor {} failed with exit code {}",
+                planned.jar,
+                processor_output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
+        }
     }
     if !patched.is_file() {
         return Err(format!(
@@ -314,13 +323,152 @@ pub(super) fn prepare_forge_server_launch(
     }))
 }
 
-fn forge_client_processor(profile: &str) -> Option<&str> {
-    let processors = json_object_after(profile, "processors")?;
-    json_object_blocks(processors).into_iter().find(|block| {
-        (!block.contains("\"sides\"") || block.contains("\"client\""))
-            && json_string(block, "jar").is_some()
-            && json_string_array(block, "args").is_some()
+/// One installer processor to run for the client, with its arguments already substituted.
+#[derive(Debug, PartialEq)]
+struct PlannedProcessor {
+    jar: String,
+    classpath: Vec<String>,
+    args: Vec<ProcessorArg>,
+}
+
+#[derive(Debug, PartialEq)]
+enum ProcessorArg {
+    Literal(String),
+    /// A `[group:artifact:version]` argument, resolved from Maven when the processor runs.
+    Artifact(String),
+}
+
+fn has_client_processor(profile: &str) -> Result<bool, String> {
+    Ok(!client_processors(&parse_profile(profile)?).is_empty())
+}
+
+fn parse_profile(profile: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str(profile)
+        .map_err(|error| format!("invalid Forge install_profile.json: {error}"))
+}
+
+/// Processors without `sides`, or whose `sides` include the client, in installer order.
+fn client_processors(profile: &serde_json::Value) -> Vec<&serde_json::Value> {
+    profile["processors"]
+        .as_array()
+        .map(|processors| {
+            processors
+                .iter()
+                .filter(|processor| match processor["sides"].as_array() {
+                    Some(sides) => sides.iter().any(|side| side.as_str() == Some("client")),
+                    None => true,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn client_processor_plan(
+    profile: &str,
+    data: &[(String, String)],
+) -> Result<Vec<PlannedProcessor>, String> {
+    let profile = parse_profile(profile)?;
+    let strings = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut plan = Vec::new();
+    for processor in client_processors(&profile) {
+        let jar = processor["jar"]
+            .as_str()
+            .ok_or_else(|| "Forge processor has no jar".to_string())?
+            .to_string();
+        let mut args = Vec::new();
+        for arg in strings(&processor["args"]) {
+            if let Some(coordinate) = arg.strip_prefix('[').and_then(|arg| arg.strip_suffix(']')) {
+                args.push(ProcessorArg::Artifact(coordinate.to_string()));
+                continue;
+            }
+            let mut value = arg;
+            for (key, replacement) in data {
+                value = value.replace(&format!("{{{key}}}"), replacement);
+            }
+            if let Some(unknown) = unknown_placeholder(&value) {
+                return Err(format!(
+                    "Forge processor {jar} uses unknown installer data `{{{unknown}}}`"
+                ));
+            }
+            args.push(ProcessorArg::Literal(value));
+        }
+        plan.push(PlannedProcessor {
+            jar,
+            classpath: strings(&processor["classpath"]),
+            args,
+        });
+    }
+    Ok(plan)
+}
+
+/// An unsubstituted `{UPPER_SNAKE}` placeholder. Running a processor with one writes to a literal path.
+fn unknown_placeholder(value: &str) -> Option<&str> {
+    value.split('{').skip(1).find_map(|rest| {
+        let name = rest.split('}').next()?;
+        (rest.contains('}')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+        .then_some(name)
     })
+}
+
+struct ProcessorPaths<'a> {
+    profile: &'a str,
+    library_dir: &'a Path,
+    game_dir: &'a Path,
+    minecraft_artifact: &'a Path,
+    patched: &'a Path,
+    binpatch: &'a Path,
+    installer: &'a Path,
+    minecraft_version: &'a str,
+}
+
+/// The installer's built-in placeholders plus every client value from the profile's `data`.
+fn processor_data(paths: ProcessorPaths<'_>) -> Result<Vec<(String, String)>, String> {
+    let mut data = vec![
+        (
+            "MINECRAFT_JAR".to_string(),
+            paths.minecraft_artifact.display().to_string(),
+        ),
+        ("PATCHED".to_string(), paths.patched.display().to_string()),
+        ("BINPATCH".to_string(), paths.binpatch.display().to_string()),
+        ("ROOT".to_string(), paths.game_dir.display().to_string()),
+        (
+            "LIBRARY_DIR".to_string(),
+            paths.library_dir.display().to_string(),
+        ),
+        (
+            "INSTALLER".to_string(),
+            paths.installer.display().to_string(),
+        ),
+        ("SIDE".to_string(), "client".to_string()),
+        (
+            "MINECRAFT_VERSION".to_string(),
+            paths.minecraft_version.to_string(),
+        ),
+    ];
+    let profile = parse_profile(paths.profile)?;
+    if let Some(entries) = profile["data"].as_object() {
+        for (key, entry) in entries {
+            if data.iter().any(|(known, _)| known == key) {
+                continue;
+            }
+            if let Some(value) = entry["client"].as_str() {
+                data.push((key.clone(), profile_data_arg(value, paths.library_dir)?));
+            }
+        }
+    }
+    Ok(data)
 }
 
 fn resolve_processor_artifact(
@@ -345,83 +493,10 @@ fn jar_manifest_main_class(jar: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("processor jar {} has no Main-Class", jar.display()))
 }
 
-struct ForgeProcessorArgs<'a> {
-    processor: &'a str,
-    repositories: &'a [(String, String)],
-    maven_cache: &'a Path,
-    library_dir: &'a Path,
-    profile: &'a str,
-    game_dir: &'a Path,
-    minecraft_artifact: &'a Path,
-    patched: &'a Path,
-    binpatch: &'a Path,
-    installer: &'a Path,
-    minecraft_version: &'a str,
-}
-
-fn forge_processor_args(request: ForgeProcessorArgs<'_>) -> Result<Vec<String>, String> {
-    let mut data = vec![
-        (
-            "MINECRAFT_JAR".to_string(),
-            request.minecraft_artifact.display().to_string(),
-        ),
-        ("PATCHED".to_string(), request.patched.display().to_string()),
-        (
-            "BINPATCH".to_string(),
-            request.binpatch.display().to_string(),
-        ),
-        ("ROOT".to_string(), request.game_dir.display().to_string()),
-        (
-            "LIBRARY_DIR".to_string(),
-            request.library_dir.display().to_string(),
-        ),
-        (
-            "INSTALLER".to_string(),
-            request.installer.display().to_string(),
-        ),
-        ("SIDE".to_string(), "client".to_string()),
-        (
-            "MINECRAFT_VERSION".to_string(),
-            request.minecraft_version.to_string(),
-        ),
-    ];
-    for key in [
-        "MC_UNPACKED",
-        "MC_UNPACKED_SHA",
-        "PATCHED_SHA",
-        "MCP_VERSION",
-    ] {
-        if let Some(value) = profile_data_client_value(request.profile, key) {
-            data.push((
-                key.to_string(),
-                profile_data_arg(&value, request.library_dir)?,
-            ));
-        }
-    }
-
-    let mut args = Vec::new();
-    for arg in json_string_array(request.processor, "args").unwrap_or_default() {
-        let arg =
-            if let Some(coordinate) = arg.strip_prefix('[').and_then(|arg| arg.strip_suffix(']')) {
-                resolve_processor_artifact(request.repositories, request.maven_cache, coordinate)?
-                    .display()
-                    .to_string()
-            } else {
-                let mut arg = arg;
-                for (key, value) in &data {
-                    arg = arg.replace(&format!("{{{key}}}"), value);
-                }
-                arg
-            };
-        args.push(arg);
-    }
-
-    Ok(args)
-}
-
 fn profile_data_client_value(profile: &str, key: &str) -> Option<String> {
-    let block = json_object_after(profile, key)?;
-    json_string(block, "client")
+    parse_profile(profile).ok()?["data"][key]["client"]
+        .as_str()
+        .map(str::to_string)
 }
 
 fn profile_data_arg(value: &str, library_dir: &Path) -> Result<String, String> {
@@ -504,6 +579,102 @@ fn installer_server_args_file(loader: &str, version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shape of Forge 61.2.0's install_profile.json for 1.21.11, trimmed to what matters.
+    const FORGE_1_21_11_PROFILE: &str = r#"{
+      "data": {
+        "MOJMAPS": { "client": "[net.minecraft:client:1.21.11:mappings@tsrg]", "server": "[net.minecraft:server:1.21.11:mappings@tsrg]" },
+        "MOJMAPS_SHA": { "client": "'f9240aaa'", "server": "'x'" },
+        "MC_OFF": { "client": "[net.minecraft:client:1.21.11:official]", "server": "[net.minecraft:server:1.21.11:official]" },
+        "BINPATCH": { "client": "/data/client.lzma", "server": "/data/server.lzma" },
+        "PATCHED": { "client": "[net.minecraftforge:forge:1.21.11-61.2.0:client]", "server": "[net.minecraftforge:forge:1.21.11-61.2.0:server]" }
+      },
+      "processors": [
+        { "sides": ["server"], "jar": "net.minecraftforge:installertools:1.4.3", "args": ["--task", "EXTRACT_FILES", "--archive", "{INSTALLER}"] },
+        { "jar": "net.minecraftforge:installertools:1.4.3", "classpath": ["net.sf.jopt-simple:jopt-simple:6.0-alpha-3"],
+          "args": ["--task", "DOWNLOAD_MOJMAPS", "--version", "1.21.11", "--side", "{SIDE}", "--output", "{MOJMAPS}"] },
+        { "sides": ["server"], "jar": "net.minecraftforge:ForgeAutoRenamingTool:1.0.6", "args": ["--input", "{MC_UNPACKED}"] },
+        { "sides": ["client"], "jar": "net.minecraftforge:ForgeAutoRenamingTool:1.0.6",
+          "args": ["--input", "{MINECRAFT_JAR}", "--output", "{MC_OFF}", "--names", "{MOJMAPS}", "--reverse"] },
+        { "jar": "net.minecraftforge:binarypatcher:1.1.1",
+          "args": ["--clean", "{MC_OFF}", "--output", "{PATCHED}", "--apply", "{BINPATCH}", "--extra", "[de.oceanlabs.mcp:mcp_config:1.21.11:mappings@txt]"] }
+      ]
+    }"#;
+
+    fn paths<'a>(profile: &'a str, library: &'a Path) -> ProcessorPaths<'a> {
+        ProcessorPaths {
+            profile,
+            library_dir: library,
+            game_dir: Path::new("/game"),
+            minecraft_artifact: Path::new("/mc/client.jar"),
+            patched: Path::new("/lib/patched.jar"),
+            binpatch: Path::new("/cache/client.lzma"),
+            installer: Path::new("/cache/installer.jar"),
+            minecraft_version: "1.21.11",
+        }
+    }
+
+    #[test]
+    fn obfuscated_profiles_run_every_client_processor_in_order_with_their_data() {
+        let library = Path::new("/lib");
+        let data =
+            processor_data(paths(FORGE_1_21_11_PROFILE, library)).expect("data should build");
+        let plan = client_processor_plan(FORGE_1_21_11_PROFILE, &data).expect("plan should build");
+
+        let jars: Vec<&str> = plan.iter().map(|p| p.jar.as_str()).collect();
+        assert_eq!(
+            jars,
+            [
+                "net.minecraftforge:installertools:1.4.3",
+                "net.minecraftforge:ForgeAutoRenamingTool:1.0.6",
+                "net.minecraftforge:binarypatcher:1.1.1",
+            ]
+        );
+        let mojmaps = library
+            .join("net/minecraft/client/1.21.11/client-1.21.11-mappings.tsrg")
+            .display()
+            .to_string();
+        assert!(
+            plan[0]
+                .args
+                .contains(&ProcessorArg::Literal(mojmaps.clone())),
+            "{:?}",
+            plan[0].args
+        );
+        assert!(
+            plan[0]
+                .args
+                .contains(&ProcessorArg::Literal("client".to_string()))
+        );
+        assert_eq!(
+            plan[0].classpath,
+            ["net.sf.jopt-simple:jopt-simple:6.0-alpha-3"]
+        );
+        assert!(plan[1].args.contains(&ProcessorArg::Literal(mojmaps)));
+        assert!(
+            plan[2]
+                .args
+                .contains(&ProcessorArg::Literal("/cache/client.lzma".to_string()))
+        );
+        assert!(
+            plan[2]
+                .args
+                .contains(&ProcessorArg::Literal("/lib/patched.jar".to_string()))
+        );
+        assert!(plan[2].args.contains(&ProcessorArg::Artifact(
+            "de.oceanlabs.mcp:mcp_config:1.21.11:mappings@txt".to_string()
+        )));
+    }
+
+    #[test]
+    fn unknown_installer_data_fails_instead_of_writing_a_literal_path() {
+        let profile =
+            r#"{"data": {}, "processors": [{"jar": "a:b:1", "args": ["--output", "{MOJMAPS}"]}]}"#;
+        let data = processor_data(paths(profile, Path::new("/lib"))).expect("data should build");
+        let error =
+            client_processor_plan(profile, &data).expect_err("an unknown placeholder must fail");
+        assert!(error.contains("{MOJMAPS}"), "{error}");
+    }
 
     #[test]
     fn neoforge_client_runtime_uses_locked_version_before_configured_latest() {

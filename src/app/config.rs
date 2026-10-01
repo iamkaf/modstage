@@ -259,6 +259,8 @@ pub(super) struct MavenCoordinates<'a> {
     pub(super) artifact: &'a str,
     pub(super) version: &'a str,
     pub(super) classifier: Option<&'a str>,
+    /// From an `@extension` suffix, as Forge installers write `client:1.21.11:mappings@tsrg`. Defaults to `jar`.
+    pub(super) extension: &'a str,
 }
 
 impl<'a> MavenCoordinates<'a> {
@@ -268,6 +270,7 @@ impl<'a> MavenCoordinates<'a> {
     }
 
     pub(super) fn parse_coordinate(source: &'a str) -> Option<Self> {
+        let (source, extension) = source.rsplit_once('@').unwrap_or((source, "jar"));
         let mut parts = source.split(':');
         let group = parts.next()?;
         let artifact = parts.next()?;
@@ -283,6 +286,7 @@ impl<'a> MavenCoordinates<'a> {
             artifact,
             version,
             classifier,
+            extension,
         })
     }
 
@@ -292,13 +296,14 @@ impl<'a> MavenCoordinates<'a> {
             .map(|classifier| format!("-{classifier}"))
             .unwrap_or_default();
         format!(
-            "{}/{}/{}/{}-{}{}.jar",
+            "{}/{}/{}/{}-{}{}.{}",
             self.group.replace('.', "/"),
             self.artifact,
             self.version,
             self.artifact,
             self.version,
-            classifier
+            classifier,
+            self.extension
         )
     }
 
@@ -307,7 +312,10 @@ impl<'a> MavenCoordinates<'a> {
             .classifier
             .map(|classifier| format!("-{classifier}"))
             .unwrap_or_default();
-        format!("{}-{}{}.jar", self.artifact, self.version, classifier)
+        format!(
+            "{}-{}{}.{}",
+            self.artifact, self.version, classifier, self.extension
+        )
     }
 }
 
