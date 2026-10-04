@@ -13,6 +13,13 @@ pub(super) fn run_instance(
     let project = ProjectContext::load(explicit_config)?;
     let instance = project.instance(selected)?;
 
+    if options.join.is_some() && side != "client" {
+        return Err("--join only applies to client runs".to_string());
+    }
+    if options.keep_alive && side != "server" {
+        return Err("--keep-alive only applies to server runs".to_string());
+    }
+
     if !instance.sides.iter().any(|configured| configured == side) {
         return Err(format!(
             "instance `{selected}` does not support side `{side}`"
@@ -52,6 +59,9 @@ pub(super) fn run_instance(
     reconcile_mods(&lock_path, instance, &project.root, &mods_dir, &mod_cache)?;
     apply_fixtures(&project.root, side, instance, &game_dir)?;
 
+    if side == "client" {
+        skip_client_onboarding(&game_dir)?;
+    }
     if side == "server" {
         apply_server_properties(instance, &game_dir)?;
         fs::write(game_dir.join("eula.txt"), "eula=true\n")
@@ -114,6 +124,8 @@ pub(super) fn run_instance(
 pub(super) struct RunOptions {
     pub(super) locked: bool,
     pub(super) keep_alive: bool,
+    /// A server address the client connects to; the run passes once the player joins.
+    pub(super) join: Option<String>,
     pub(super) java: Option<PathBuf>,
     pub(super) timeout: Option<String>,
 }

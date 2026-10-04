@@ -151,7 +151,7 @@ in the instance lock.
 | `modstage clean instance <instance> [--side <client\|server>]` | Remove durable staged state |
 | `modstage clean cache` | Remove redownloadable cache data |
 | `modstage java list` | List discovered and registered Java runtimes |
-| `modstage java install <major>` | Register or install a managed Java runtime, checked against Azul's published SHA-256 |
+| `modstage java install <major>` | Register or install a managed Java runtime, checked against Adoptium's published SHA-256 |
 | `modstage java doctor` | Validate Java selection |
 
 Global option:
@@ -165,13 +165,15 @@ Global option:
 | Option | Description |
 | --- | --- |
 | `--locked` | Fail instead of refreshing a missing or stale instance lock |
-| `--keep-alive` | Leave a ready server running until timeout |
-| `--java <path>` | Use an explicit Java executable |
+| `--keep-alive` | Leave a ready server running until timeout, forwarding stdin to its console so `stop` ends it |
+| `--join <host:port>` | Connect the client to a server and pass once the player joins |
+| `--java <path\|major>` | Use a Java executable, or the managed runtime for a major version such as `17` |
 | `--timeout <duration>` | Bound the launch, for example `120s` |
 
-Without `--java`, `run` uses the managed runtime for the Java version Minecraft asks for.
-When there isn't one, it uses `java` on `PATH` if that is new enough, and otherwise
-installs the managed runtime first.
+Without `--java`, `run` uses the Java version Minecraft asks for, as the vanilla launcher
+does: the managed runtime for that version, or `java` on `PATH` if it is that exact version,
+and otherwise it installs the managed runtime first. It never substitutes a newer Java,
+because older loaders can't read newer class files.
 
 ### Runtime Behavior
 

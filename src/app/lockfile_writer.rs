@@ -100,10 +100,16 @@ impl LockfileWriter {
             self.library(LockLibrary {
                 name: library.name,
                 repository: None,
-                side: None,
+                // Natives are only extracted for the client.
+                side: library.natives.then(|| "client".to_string()),
                 url: Some(library.url),
                 path: library.path,
-                sha256: library.sha256,
+                sha256: Some(library.sha256),
+                library_use: if library.natives {
+                    LibraryUse::Natives
+                } else {
+                    LibraryUse::Classpath
+                },
             });
         }
 
@@ -156,7 +162,14 @@ impl LockfileWriter {
             self.doc.string("side", side);
         }
         self.doc.string("path", library.path);
-        self.doc.string("sha256", library.sha256);
+        if let Some(sha256) = library.sha256 {
+            self.doc.string("sha256", sha256);
+        }
+        match library.library_use {
+            LibraryUse::Classpath => {}
+            LibraryUse::Natives => self.doc.string("use", "natives"),
+            LibraryUse::LibraryDirectory => self.doc.string("use", "library_directory"),
+        }
     }
 
     pub(super) fn mods(&mut self, mods: &[String]) {
@@ -231,5 +244,18 @@ pub(super) struct LockLibrary {
     pub(super) side: Option<String>,
     pub(super) url: Option<String>,
     pub(super) path: String,
-    pub(super) sha256: String,
+    /// `None` for a library the installer generates, which has no fixed contents to lock.
+    pub(super) sha256: Option<String>,
+    pub(super) library_use: LibraryUse,
+}
+
+/// How a launch uses a locked library.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum LibraryUse {
+    Classpath,
+    /// A jar of native libraries, extracted before a client launch.
+    Natives,
+    /// Present in the libraries directory for the loader to find by Maven path, but not on the
+    /// classpath. Forge's language providers load this way.
+    LibraryDirectory,
 }

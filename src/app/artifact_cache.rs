@@ -61,15 +61,7 @@ fn fetch_to_cache_inner(
     }
 
     if url.starts_with("https://") || url.starts_with("http://") {
-        let response = HTTP_CLIENT
-            .get(url)
-            .send()
-            .map_err(|error| format!("failed to fetch {url}: {error}"))?
-            .error_for_status()
-            .map_err(|error| format!("failed to fetch {url}: {error}"))?;
-        let bytes = response
-            .bytes()
-            .map_err(|error| format!("failed to read response body from {url}: {error}"))?;
+        let bytes = download(url)?;
         let temp_destination = temporary_destination(&destination)?;
         fs::write(&temp_destination, &bytes).map_err(|error| {
             format!(
@@ -94,6 +86,29 @@ fn fetch_to_cache_inner(
     }
 
     Err(format!("unsupported URL `{url}`"))
+}
+
+/// Fetches `url`, retrying connection failures and server errors a few times, since a resolve
+/// downloads hundreds of files and one dropped request shouldn't fail it.
+fn download(url: &str) -> Result<Vec<u8>, String> {
+    let mut attempt = 1;
+    loop {
+        let result = HTTP_CLIENT.get(url).send().and_then(|response| {
+            response
+                .error_for_status()
+                .and_then(|response| response.bytes())
+        });
+        match result {
+            Ok(bytes) => return Ok(bytes.to_vec()),
+            Err(error)
+                if attempt < 3 && error.status().is_none_or(|status| status.is_server_error()) =>
+            {
+                std::thread::sleep(Duration::from_secs(attempt));
+                attempt += 1;
+            }
+            Err(error) => return Err(format!("failed to fetch {url}: {error}")),
+        }
+    }
 }
 
 fn temporary_destination(destination: &Path) -> Result<PathBuf, String> {

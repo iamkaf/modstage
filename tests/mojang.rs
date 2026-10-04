@@ -511,6 +511,8 @@ sides = ["client", "server"]
 }
 
 #[test]
+// The fixture library is disallowed on macOS by its rules.
+#[cfg(not(target_os = "macos"))]
 fn resolve_records_mojang_main_class_and_libraries() {
     let project = temp_dir("mojang-launch-project");
     let metadata = temp_dir("mojang-launch-metadata");
@@ -536,7 +538,7 @@ fn resolve_records_mojang_main_class_and_libraries() {
   }},
   "libraries": [{{
     "name": "com.example:example-lib:1.0.0",
-    "rules": [{{ "action": "allow", "os": {{ "name": "osx" }} }}],
+    "rules": [{{ "action": "allow" }}, {{ "action": "disallow", "os": {{ "name": "osx" }} }}],
     "downloads": {{
       "artifact": {{
         "path": "com/example/example-lib/1.0.0/example-lib-1.0.0.jar",

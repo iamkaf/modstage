@@ -54,21 +54,23 @@ pub(super) struct InstalledJava {
     pub(super) sha256: String,
 }
 
-/// Downloads Azul's JRE for `major`, checks it against the SHA-256 Azul publishes, and
-/// installs it as the managed runtime for that major. The runtime is prepared in a staging
-/// directory and moved into place, so runs installing the same Java at once can't collide.
+/// Downloads Adoptium's Temurin JRE for `major`, checks it against the SHA-256 Adoptium
+/// publishes, and installs it as the managed runtime for that major. Temurin bundles its own
+/// zlib, so Forge installers reproduce the exact jars their processors expect; runtimes linked
+/// against a system zlib-ng compress differently and fail those checks.
+/// The runtime is prepared in a staging directory and moved into place, so runs installing the
+/// same Java at once can't collide.
 pub(super) fn install_managed_java(major: u32) -> Result<InstalledJava, String> {
-    let metadata_url = azul_metadata_url(major)?;
+    let metadata_url = java_metadata_url(major)?;
     let cache_dir = cache_dir()?.join("downloads").join("java");
-    let metadata_path = fetch_to_cache(&metadata_url, &cache_dir, &format!("azul-{major}.json"))?;
+    let metadata_path =
+        fetch_to_cache(&metadata_url, &cache_dir, &format!("temurin-{major}.json"))?;
     let metadata = fs::read_to_string(&metadata_path)
         .map_err(|error| format!("failed to read {}: {error}", metadata_path.display()))?;
-    let download_url = json_string(&metadata, "download_url")
-        .ok_or_else(|| "Azul metadata did not include download_url".to_string())?;
-    let expected_sha256 = json_string(&metadata, "sha256_hash")
-        .ok_or_else(|| "Azul metadata did not include sha256_hash".to_string())?;
-    let archive_name =
-        json_string(&metadata, "name").unwrap_or_else(|| format!("zulu-java-{major}.zip"));
+    let package = temurin_package(&metadata, major)?;
+    let download_url = package.link;
+    let expected_sha256 = package.checksum;
+    let archive_name = package.name;
     let archive_path = fetch_to_cache(&download_url, &cache_dir, &archive_name)?;
     let archive = fs::read(&archive_path)
         .map_err(|error| format!("failed to read {}: {error}", archive_path.display()))?;
@@ -76,7 +78,7 @@ pub(super) fn install_managed_java(major: u32) -> Result<InstalledJava, String> 
     if !sha256.eq_ignore_ascii_case(&expected_sha256) {
         let _ = fs::remove_file(&archive_path);
         return Err(format!(
-            "{archive_name} has SHA-256 {sha256}, but Azul published {expected_sha256}"
+            "{archive_name} has SHA-256 {sha256}, but Adoptium published {expected_sha256}"
         ));
     }
 
@@ -162,6 +164,59 @@ fn stage_managed_java(
 }
 
 fn extract_managed_java(archive_path: &Path, install_dir: &Path) -> Result<PathBuf, String> {
+    if archive_path
+        .extension()
+        .is_some_and(|extension| extension != "zip")
+    {
+        extract_tar_gz(archive_path, install_dir)?;
+    } else {
+        extract_zip(archive_path, install_dir)?;
+    }
+    find_managed_java(install_dir)?.ok_or_else(|| {
+        format!(
+            "Java archive {} does not contain bin/{}",
+            archive_path.display(),
+            java_bin()
+        )
+    })
+}
+
+fn extract_tar_gz(archive_path: &Path, install_dir: &Path) -> Result<(), String> {
+    let archive_file = fs::File::open(archive_path)
+        .map_err(|error| format!("failed to open {}: {error}", archive_path.display()))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive_file));
+    archive.set_preserve_permissions(true);
+    let entries = archive.entries().map_err(|error| {
+        format!(
+            "failed to read Java archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    for entry in entries {
+        let mut entry = entry.map_err(|error| {
+            format!(
+                "failed to read Java archive {}: {error}",
+                archive_path.display()
+            )
+        })?;
+        // `unpack_in` refuses entries that would land outside `install_dir`.
+        let unpacked = entry.unpack_in(install_dir).map_err(|error| {
+            format!(
+                "failed to extract Java archive {}: {error}",
+                archive_path.display()
+            )
+        })?;
+        if !unpacked {
+            return Err(format!(
+                "Java archive {} contains an unsafe path",
+                archive_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn extract_zip(archive_path: &Path, install_dir: &Path) -> Result<(), String> {
     let archive_file = fs::File::open(archive_path)
         .map_err(|error| format!("failed to open {}: {error}", archive_path.display()))?;
     let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| {
@@ -206,13 +261,7 @@ fn extract_managed_java(archive_path: &Path, install_dir: &Path) -> Result<PathB
         }
     }
 
-    find_managed_java(install_dir)?.ok_or_else(|| {
-        format!(
-            "Java archive {} does not contain bin/{}",
-            archive_path.display(),
-            java_bin()
-        )
-    })
+    Ok(())
 }
 
 fn find_managed_java(root: &Path) -> Result<Option<PathBuf>, String> {
@@ -272,16 +321,52 @@ pub(super) fn register_existing_java(major: u32, java: &Path) -> Result<(), Stri
     Ok(())
 }
 
-pub(super) fn azul_metadata_url(major: u32) -> Result<String, String> {
-    if let Ok(url) = env::var("MODSTAGE_AZUL_METADATA_URL") {
+pub(super) fn java_metadata_url(major: u32) -> Result<String, String> {
+    if let Ok(url) = env::var("MODSTAGE_JAVA_METADATA_URL") {
         return Ok(url);
     }
+    let architecture = match env::consts::ARCH {
+        "x86_64" => "x64",
+        "x86" => "x86",
+        "aarch64" => "aarch64",
+        "arm" => "arm",
+        other => return Err(format!("no managed Java is published for {other}")),
+    };
+    let os = match env::consts::OS {
+        "macos" => "mac",
+        other => other,
+    };
 
     Ok(format!(
-        "https://api.azul.com/metadata/v1/zulu/packages?arch={}&java_version={major}&os={}&archive_type=zip&javafx_bundled=false&java_package_type=jre&page_size=1&include_fields=sha256_hash",
-        env::consts::ARCH,
-        env::consts::OS
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={architecture}&image_type=jre&os={os}&vendor=eclipse"
     ))
+}
+
+#[derive(serde::Deserialize)]
+struct TemurinRelease {
+    binary: TemurinBinary,
+}
+
+#[derive(serde::Deserialize)]
+struct TemurinBinary {
+    package: TemurinPackage,
+}
+
+#[derive(serde::Deserialize)]
+struct TemurinPackage {
+    name: String,
+    link: String,
+    checksum: String,
+}
+
+fn temurin_package(metadata: &str, major: u32) -> Result<TemurinPackage, String> {
+    let releases: Vec<TemurinRelease> = serde_json::from_str(metadata)
+        .map_err(|error| format!("failed to parse Adoptium metadata: {error}"))?;
+    releases
+        .into_iter()
+        .next()
+        .map(|release| release.binary.package)
+        .ok_or_else(|| format!("Adoptium publishes no Java {major} runtime for this platform"))
 }
 
 pub(super) fn parse_java_arg(args: &[String]) -> Result<Option<PathBuf>, String> {

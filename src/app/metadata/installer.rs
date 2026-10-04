@@ -19,6 +19,8 @@ struct InstallerArguments {
 struct InstallerLibraryEntry {
     name: String,
     downloads: Option<InstallerLibraryDownloads>,
+    #[serde(default)]
+    rules: Vec<LibraryRule>,
 }
 
 #[derive(Deserialize)]
@@ -30,13 +32,15 @@ struct InstallerLibraryDownloads {
 struct InstallerLibraryArtifact {
     path: String,
     url: String,
+    sha1: Option<String>,
 }
 
 pub(in crate::app) struct InstallerProfileLibrary {
     pub(in crate::app) name: String,
     pub(in crate::app) path: String,
-    pub(in crate::app) url: String,
-    pub(in crate::app) sha256: String,
+    /// Where to download the library and its hash, or `None` for a library the installer's
+    /// processors generate, such as the patched client jar.
+    pub(in crate::app) download: Option<(String, String)>,
 }
 
 pub(in crate::app) struct InstallerProfile {
@@ -44,6 +48,14 @@ pub(in crate::app) struct InstallerProfile {
     pub(in crate::app) jvm_args: Vec<String>,
     pub(in crate::app) game_args: Vec<String>,
     pub(in crate::app) libraries: Vec<InstallerProfileLibrary>,
+    /// Libraries from `install_profile.json`, which the installer places in the libraries
+    /// directory without adding them to the classpath.
+    pub(in crate::app) directory_libraries: Vec<InstallerProfileLibrary>,
+}
+
+#[derive(Deserialize)]
+struct InstallProfileJson {
+    libraries: Option<Vec<InstallerLibraryEntry>>,
 }
 
 pub(in crate::app) fn resolve_installer_profile(
@@ -57,6 +69,7 @@ pub(in crate::app) fn resolve_installer_profile(
             jvm_args: Vec::new(),
             game_args: Vec::new(),
             libraries: Vec::new(),
+            directory_libraries: Vec::new(),
         });
     };
     let parsed: InstallerVersionJson = serde_json::from_str(&version_json)
@@ -72,9 +85,37 @@ pub(in crate::app) fn resolve_installer_profile(
         .as_ref()
         .and_then(|arguments| arguments.game.clone())
         .unwrap_or_default();
-    let mut libraries = Vec::new();
+    let libraries = fetch_installer_libraries(parsed.libraries.as_deref(), cache_dir, true)?;
+    let directory_libraries = match jar_entry_text(installer_path, &["install_profile.json"])? {
+        Some(profile) => {
+            let parsed: InstallProfileJson = serde_json::from_str(&profile)
+                .map_err(|error| format!("failed to parse installer profile: {error}"))?;
+            fetch_installer_libraries(parsed.libraries.as_deref(), cache_dir, false)?
+        }
+        None => Vec::new(),
+    };
 
-    for library in parsed.libraries.as_deref().unwrap_or_default() {
+    Ok(InstallerProfile {
+        main_class,
+        jvm_args,
+        game_args,
+        libraries,
+        directory_libraries,
+    })
+}
+
+/// Downloads the libraries an installer lists. Entries without a URL are generated during
+/// installation; they are kept, undownloaded, only when `keep_generated` is set.
+fn fetch_installer_libraries(
+    entries: Option<&[InstallerLibraryEntry]>,
+    cache_dir: &Path,
+    keep_generated: bool,
+) -> Result<Vec<InstallerProfileLibrary>, String> {
+    let mut libraries = Vec::new();
+    for library in entries.unwrap_or_default() {
+        if !rules_allow(&library.rules, current_os()) {
+            continue;
+        }
         let Some(artifact) = library
             .downloads
             .as_ref()
@@ -83,32 +124,31 @@ pub(in crate::app) fn resolve_installer_profile(
             continue;
         };
         if artifact.url.is_empty() {
+            if keep_generated {
+                libraries.push(InstallerProfileLibrary {
+                    name: library.name.clone(),
+                    path: artifact.path.clone(),
+                    download: None,
+                });
+            }
             continue;
         }
-        let file_name = artifact
-            .path
-            .rsplit('/')
-            .next()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("library.jar");
-        let library_path = fetch_to_cache(&artifact.url, cache_dir, file_name)?;
+        let library_path = fetch_library(
+            &artifact.url,
+            &artifact.path,
+            artifact.sha1.as_deref(),
+            cache_dir,
+        )?;
         let bytes = fs::read(&library_path)
             .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
 
         libraries.push(InstallerProfileLibrary {
             name: library.name.clone(),
             path: artifact.path.clone(),
-            url: artifact.url.clone(),
-            sha256: sha256_hex(&bytes),
+            download: Some((artifact.url.clone(), sha256_hex(&bytes))),
         });
     }
-
-    Ok(InstallerProfile {
-        main_class,
-        jvm_args,
-        game_args,
-        libraries,
-    })
+    Ok(libraries)
 }
 
 pub(in crate::app) fn jar_entry_text(
