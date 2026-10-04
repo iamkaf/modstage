@@ -284,7 +284,8 @@ modrinth_pack = "modrinth:sample-pack:1.0.0"
     );
     assert_eq!(
         fs::read_to_string(client_game.join("options.txt")).unwrap(),
-        "client-option"
+        "client-option\nonboardAccessibility:false\n",
+        "pack options should survive, with the onboarding screen turned off"
     );
     assert_eq!(
         fs::read_to_string(server_game.join("server.properties")).unwrap(),

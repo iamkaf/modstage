@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -106,33 +105,41 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let temp = temp_dir("java-install");
     let data_home = temp.join("data");
     let cache_home = temp.join("cache");
-    let archive = temp.join("zulu-jre.zip");
+    let archive = temp.join("temurin-jre.tar.gz");
     let archive_file = fs::File::create(&archive).expect("failed to create fake Java archive");
-    let mut zip = zip::ZipWriter::new(archive_file);
-    zip.start_file(
-        format!("zulu-test-jre/bin/{}", java_bin()),
-        zip::write::SimpleFileOptions::default(),
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        archive_file,
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(b"runtime".len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    tar.append_data(
+        &mut header,
+        format!("jdk-test-jre/bin/{}", java_bin()),
+        &b"runtime"[..],
     )
-    .expect("failed to start fake Java archive entry");
-    zip.write_all(b"runtime")
-        .expect("failed to write fake Java archive entry");
-    zip.finish().expect("failed to finish fake Java archive");
-    let metadata = temp.join("azul.json");
+    .expect("failed to write fake Java archive entry");
+    tar.into_inner()
+        .and_then(|gzip| gzip.finish())
+        .expect("failed to finish fake Java archive");
+    let metadata = temp.join("temurin.json");
     let write_metadata = |sha256: &str| {
         fs::write(
             &metadata,
             format!(
-                r#"[{{"download_url":"file://{}","name":"zulu-test-jre.zip","sha256_hash":"{sha256}"}}]"#,
+                r#"[{{"binary":{{"package":{{"link":"file://{}","name":"temurin-test-jre.tar.gz","checksum":"{sha256}"}}}}}}]"#,
                 file_url_path(&archive)
             ),
         )
-        .expect("failed to write fake Azul metadata");
+        .expect("failed to write fake Adoptium metadata");
     };
     let install = || {
         run_with_env(
             &["java", "install", "25"],
             &[
-                ("MODSTAGE_AZUL_METADATA_URL", &file_url(&metadata)),
+                ("MODSTAGE_JAVA_METADATA_URL", &file_url(&metadata)),
                 (
                     "MODSTAGE_DATA_HOME",
                     data_home.to_str().expect("data path is not UTF-8"),
@@ -150,8 +157,8 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let rejected = install();
     let stderr = String::from_utf8_lossy(&rejected.stderr);
     assert!(
-        !rejected.status.success() && stderr.contains(&format!("but Azul published {wrong}")),
-        "java install should reject an archive whose hash differs from Azul's\n{stderr}"
+        !rejected.status.success() && stderr.contains(&format!("but Adoptium published {wrong}")),
+        "java install should reject an archive whose hash differs from Adoptium's\n{stderr}"
     );
     assert!(
         !data_home.join("modstage").join("java").join("25").exists(),
@@ -179,12 +186,12 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
         .join("modstage")
         .join("downloads")
         .join("java")
-        .join("zulu-test-jre.zip");
+        .join("temurin-test-jre.tar.gz");
     let managed = data_home
         .join("modstage")
         .join("java")
         .join("25")
-        .join("zulu-test-jre.zip");
+        .join("temurin-test-jre.tar.gz");
     let record = data_home
         .join("modstage")
         .join("java")
@@ -194,7 +201,7 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
         .join("modstage")
         .join("java")
         .join("25")
-        .join("zulu-test-jre")
+        .join("jdk-test-jre")
         .join("bin")
         .join(java_bin());
     assert!(
@@ -210,7 +217,7 @@ fn java_install_records_a_managed_runtime_in_durable_state() {
     let record = fs::read_to_string(record).expect("runtime.toml should be readable");
     for expected in [
         r#"major = 25"#,
-        r#"archive_name = "zulu-test-jre.zip""#,
+        r#"archive_name = "temurin-test-jre.tar.gz""#,
         "java = ",
         "sha256 = ",
     ] {

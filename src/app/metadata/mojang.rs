@@ -49,17 +49,38 @@ struct MojangDownload {
 struct MojangLibraryEntry {
     name: String,
     downloads: Option<MojangLibraryDownloads>,
+    #[serde(default)]
+    rules: Vec<LibraryRule>,
+    /// Operating system to classifier, for versions that ship natives as classifier jars.
+    #[serde(default)]
+    natives: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
 struct MojangLibraryDownloads {
     artifact: Option<MojangLibraryArtifact>,
+    #[serde(default)]
+    classifiers: HashMap<String, MojangLibraryArtifact>,
+}
+
+#[derive(Deserialize)]
+pub(in crate::app) struct LibraryRule {
+    action: String,
+    os: Option<LibraryRuleOs>,
+    features: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct LibraryRuleOs {
+    name: Option<String>,
+    arch: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct MojangLibraryArtifact {
     path: String,
     url: String,
+    sha1: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +121,8 @@ pub(in crate::app) struct MinecraftLibrary {
     pub(in crate::app) path: String,
     pub(in crate::app) url: String,
     pub(in crate::app) sha256: String,
+    /// A jar of native libraries the client extracts before launch, rather than a classpath entry.
+    pub(in crate::app) natives: bool,
 }
 
 pub(in crate::app) struct MinecraftAssets {
@@ -301,27 +324,20 @@ fn resolve_minecraft_libraries_from_version(
     version_json: &MojangVersion,
     cache_dir: &Path,
 ) -> Result<Vec<MinecraftLibrary>, String> {
-    version_json
-        .libraries
-        .as_deref()
-        .unwrap_or_default()
+    let downloads = library_downloads(
+        version_json.libraries.as_deref().unwrap_or_default(),
+        current_os(),
+    );
+    let libraries_dir = cache_dir.join("libraries");
+    downloads
         .par_iter()
-        .filter_map(|library| {
-            library
-                .downloads
-                .as_ref()
-                .and_then(|downloads| downloads.artifact.as_ref())
-                .map(|artifact| (library, artifact))
-        })
-        .map(|(library, artifact)| {
-            let file_name = artifact
-                .path
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .unwrap_or("library.jar");
-            let library_path =
-                fetch_to_cache(&artifact.url, &cache_dir.join("libraries"), file_name)?;
+        .map(|(library, artifact, natives)| {
+            let library_path = fetch_library(
+                &artifact.url,
+                &artifact.path,
+                artifact.sha1.as_deref(),
+                &libraries_dir,
+            )?;
             let bytes = fs::read(&library_path)
                 .map_err(|error| format!("failed to read {}: {error}", library_path.display()))?;
 
@@ -330,9 +346,109 @@ fn resolve_minecraft_libraries_from_version(
                 path: artifact.path.clone(),
                 url: artifact.url.clone(),
                 sha256: sha256_hex(&bytes),
+                natives: *natives,
             })
         })
         .collect()
+}
+
+/// The jars a launcher on `os` downloads for these libraries, in order and without repeats.
+/// Versions before 1.19 list some libraries twice and ship natives as classifier jars.
+fn library_downloads<'a>(
+    libraries: &'a [MojangLibraryEntry],
+    os: &str,
+) -> Vec<(&'a MojangLibraryEntry, &'a MojangLibraryArtifact, bool)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut downloads = Vec::new();
+    for library in libraries {
+        if !rules_allow(&library.rules, os) {
+            continue;
+        }
+        let Some(library_downloads) = &library.downloads else {
+            continue;
+        };
+        let natives = library
+            .natives
+            .get(os)
+            .map(|classifier| classifier.replace("${arch}", "64"))
+            .and_then(|classifier| library_downloads.classifiers.get(&classifier));
+        for (artifact, is_natives) in [
+            (library_downloads.artifact.as_ref(), false),
+            (natives, true),
+        ] {
+            if let Some(artifact) = artifact
+                && seen.insert(artifact.path.as_str())
+            {
+                downloads.push((library, artifact, is_natives));
+            }
+        }
+    }
+    downloads
+}
+
+/// Whether a library's launcher rules include it on `os`. Without rules a library always applies.
+pub(in crate::app) fn rules_allow(rules: &[LibraryRule], os: &str) -> bool {
+    if rules.is_empty() {
+        return true;
+    }
+    let mut allowed = false;
+    for rule in rules {
+        let matches = rule.features.is_none()
+            && rule.os.as_ref().is_none_or(|rule_os| {
+                rule_os.name.as_deref().is_none_or(|name| name == os)
+                    && rule_os
+                        .arch
+                        .as_deref()
+                        .is_none_or(|arch| arch == env::consts::ARCH)
+            });
+        if matches {
+            allowed = rule.action == "allow";
+        }
+    }
+    allowed
+}
+
+/// The operating system name launcher rules use for this machine.
+pub(in crate::app) fn current_os() -> &'static str {
+    match env::consts::OS {
+        "macos" => "osx",
+        os => os,
+    }
+}
+
+/// Downloads a library into `libraries_dir` at its Maven path, the layout loader arguments expect.
+/// A file already there is kept when it matches the SHA-1 the metadata declares.
+pub(in crate::app) fn fetch_library(
+    url: &str,
+    maven_path: &str,
+    sha1: Option<&str>,
+    libraries_dir: &Path,
+) -> Result<PathBuf, String> {
+    let relative = Path::new(maven_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "library path `{maven_path}` leaves the libraries directory"
+        ));
+    }
+    let destination = libraries_dir.join(relative);
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("library path `{maven_path}` has no file name"))?;
+    if let Some(sha1) = sha1
+        && fs::read(&destination).is_ok_and(|bytes| sha1_hex(&bytes).eq_ignore_ascii_case(sha1))
+    {
+        return Ok(destination);
+    }
+    fetch_to_cache(
+        url,
+        destination.parent().unwrap_or(libraries_dir),
+        file_name,
+    )
 }
 
 pub(in crate::app) fn mojang_manifest_url() -> Option<String> {
@@ -350,4 +466,83 @@ pub(in crate::app) fn manifest_version_url(manifest: &str, version: &str) -> Opt
         .into_iter()
         .find(|candidate| candidate.id == version)
         .map(|candidate| candidate.url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The library shapes 1.18.2 uses: a macOS-only LWJGL, the same LWJGL listed again with
+    /// natives, and a natives classifier per operating system.
+    const LEGACY_LIBRARIES: &str = r#"[
+      { "name": "org.lwjgl:lwjgl:3.2.1",
+        "downloads": { "artifact": { "path": "org/lwjgl/lwjgl/3.2.1/lwjgl-3.2.1.jar", "url": "u" } },
+        "rules": [{ "action": "allow", "os": { "name": "osx" } }] },
+      { "name": "org.lwjgl:lwjgl:3.2.2",
+        "downloads": { "artifact": { "path": "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar", "url": "u" } },
+        "rules": [{ "action": "allow" }, { "action": "disallow", "os": { "name": "osx" } }] },
+      { "name": "org.lwjgl:lwjgl:3.2.2",
+        "downloads": {
+          "artifact": { "path": "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar", "url": "u" },
+          "classifiers": {
+            "natives-linux": { "path": "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2-natives-linux.jar", "url": "u" },
+            "natives-windows": { "path": "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2-natives-windows.jar", "url": "u" }
+          }
+        },
+        "natives": { "linux": "natives-linux", "windows": "natives-windows" },
+        "rules": [{ "action": "allow" }, { "action": "disallow", "os": { "name": "osx" } }] },
+      { "name": "com.mojang:text2speech:1.12.4",
+        "downloads": { "classifiers": {
+          "natives-linux": { "path": "com/mojang/text2speech/1.12.4/text2speech-1.12.4-natives-linux.jar", "url": "u" }
+        } },
+        "natives": { "linux": "natives-linux" } }
+    ]"#;
+
+    fn downloads(os: &str) -> Vec<(String, bool)> {
+        let libraries: Vec<MojangLibraryEntry> =
+            serde_json::from_str(LEGACY_LIBRARIES).expect("libraries should parse");
+        library_downloads(&libraries, os)
+            .into_iter()
+            .map(|(_, artifact, natives)| (artifact.path.clone(), natives))
+            .collect()
+    }
+
+    #[test]
+    fn linux_gets_its_own_libraries_once_and_its_natives_as_natives() {
+        assert_eq!(
+            downloads("linux"),
+            [
+                ("org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar".to_string(), false),
+                (
+                    "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2-natives-linux.jar".to_string(),
+                    true
+                ),
+                (
+                    "com/mojang/text2speech/1.12.4/text2speech-1.12.4-natives-linux.jar"
+                        .to_string(),
+                    true
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn macos_gets_only_the_macos_lwjgl() {
+        assert_eq!(
+            downloads("osx"),
+            [("org/lwjgl/lwjgl/3.2.1/lwjgl-3.2.1.jar".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn library_paths_cannot_leave_the_libraries_directory() {
+        let error = fetch_library(
+            "file:///x.jar",
+            "../escape.jar",
+            None,
+            Path::new("/libraries"),
+        )
+        .expect_err("a path outside the libraries directory must fail");
+        assert!(error.contains("leaves the libraries directory"), "{error}");
+    }
 }

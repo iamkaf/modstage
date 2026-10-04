@@ -121,13 +121,29 @@ pub(super) fn resolve_instance_lock(
         }
         if let Some(profile) = installer_profile {
             for library in profile.libraries {
+                let (url, sha256) = library.download.unzip();
                 lock.library(LockLibrary {
                     name: library.name,
                     repository: None,
                     side: None,
-                    url: Some(library.url),
+                    url,
                     path: library.path,
-                    sha256: library.sha256,
+                    sha256,
+                    library_use: LibraryUse::Classpath,
+                });
+            }
+            // The vanilla launcher's install puts these in its libraries directory, where the
+            // loader finds them; they include processor tools that must stay off the classpath.
+            for library in profile.directory_libraries {
+                let (url, sha256) = library.download.unzip();
+                lock.library(LockLibrary {
+                    name: library.name,
+                    repository: None,
+                    side: Some("client".to_string()),
+                    url,
+                    path: library.path,
+                    sha256,
+                    library_use: LibraryUse::LibraryDirectory,
                 });
             }
         }
@@ -322,7 +338,8 @@ pub(super) fn resolved_maven_library_artifact(
             side: side.map(str::to_string),
             url: artifact.url,
             path: path.display().to_string(),
-            sha256: sha256_hex(&bytes),
+            sha256: Some(sha256_hex(&bytes)),
+            library_use: LibraryUse::Classpath,
         },
         path,
     }))

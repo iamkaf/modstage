@@ -627,9 +627,18 @@ sides = ["client", "server"]
             "lockfile should contain {expected:?}\n{lock}"
         );
     }
+    // The installer's processors generate the client jar, so it is locked by path alone; a launch
+    // puts it on the classpath where the profile does.
+    let generated = lock
+        .split("[[library]]")
+        .find(|block| block.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:client""#))
+        .expect("the generated client jar should be locked");
     assert!(
-        !lock.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:client""#),
-        "generated Forge profile libraries with empty URLs should not be locked\n{lock}"
+        generated.contains(
+            r#"path = "net/minecraftforge/forge/26.1.2-64.0.4/forge-26.1.2-64.0.4-client.jar""#
+        ) && !generated.contains("url =")
+            && !generated.contains("sha256 ="),
+        "{generated}"
     );
     assert!(
         !lock.contains(r#"name = "net.minecraftforge:forge:26.1.2-64.0.4:installer""#),

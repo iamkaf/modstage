@@ -31,6 +31,7 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             RunOptions {
                 locked: command.get_flag("locked"),
                 keep_alive: command.get_flag("keep_alive"),
+                join: command.get_one::<String>("join").cloned(),
                 java: command.get_one::<PathBuf>("java").cloned(),
                 timeout: command.get_one::<String>("timeout").cloned(),
             },
@@ -105,14 +106,20 @@ fn cli() -> Command {
                     Arg::new("keep_alive")
                         .long("keep-alive")
                         .action(ArgAction::SetTrue)
-                        .help("Leave a ready server running until timeout"),
+                        .help("Leave a ready server running until timeout, forwarding stdin to its console"),
+                )
+                .arg(
+                    Arg::new("join")
+                        .long("join")
+                        .value_name("host:port")
+                        .help("Connect the client to a server and pass once the player joins"),
                 )
                 .arg(
                     Arg::new("java")
                         .long("java")
-                        .value_name("path")
+                        .value_name("path|major")
                         .value_parser(clap::value_parser!(PathBuf))
-                        .help("Use an explicit Java executable"),
+                        .help("Use a Java executable, or the managed runtime for a major version"),
                 )
                 .arg(
                     Arg::new("timeout")

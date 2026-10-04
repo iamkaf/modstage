@@ -86,8 +86,9 @@ pub(super) fn run_server_process_with_timeout(
 pub(super) fn run_client_process_with_timeout(
     command: &mut Command,
     timeout: Option<Duration>,
+    finish_on_join: bool,
 ) -> Result<TimedOutput, String> {
-    ProcessSupervisor::new(ProcessPolicy::Client).run(command, timeout)
+    ProcessSupervisor::new(ProcessPolicy::Client { finish_on_join }).run(command, timeout)
 }
 
 struct ProcessSupervisor {
@@ -110,6 +111,16 @@ impl ProcessSupervisor {
             .spawn()
             .map_err(|error| format!("process spawn failed: {error}"))?;
         let mut child_stdin = child.stdin.take();
+        // A kept-alive server takes console commands, such as `stop`, from whoever runs Modstage.
+        if matches!(
+            self.policy,
+            ProcessPolicy::Server {
+                stop_on_ready: false
+            }
+        ) && let Some(stdin) = child_stdin.take()
+        {
+            forward_stdin(stdin);
+        }
         let stdout = child
             .stdout
             .take()
@@ -218,7 +229,7 @@ impl ProcessSupervisor {
 
 enum ProcessPolicy {
     Server { stop_on_ready: bool },
-    Client,
+    Client { finish_on_join: bool },
 }
 
 impl ProcessPolicy {
@@ -235,7 +246,10 @@ impl ProcessPolicy {
     fn should_finish_gracefully(&self, event: &ProcessEvent, sent_stop: bool) -> bool {
         match self {
             Self::Server { .. } => matches!(event, ProcessEvent::ShutdownComplete) && sent_stop,
-            Self::Client => matches!(event, ProcessEvent::ClientShutdownComplete),
+            Self::Client { finish_on_join } => {
+                matches!(event, ProcessEvent::ClientShutdownComplete)
+                    || (*finish_on_join && matches!(event, ProcessEvent::ClientJoined))
+            }
         }
     }
 }
@@ -249,6 +263,7 @@ enum ProcessEvent {
     Ready,
     ShutdownComplete,
     ClientShutdownComplete,
+    ClientJoined,
 }
 
 fn spawn_process_reader<R>(
@@ -303,9 +318,34 @@ where
                 if text.contains("Render thread/INFO") && text.contains("Stopping!") {
                     let _ = sender.send(ProcessEvent::ClientShutdownComplete);
                 }
+                if is_join_message(&text) {
+                    let _ = sender.send(ProcessEvent::ClientJoined);
+                }
             }
         }
     })
+}
+
+/// A line a client logs only once it has joined a server: the chat announcing its player, or,
+/// before 1.19 logged chat, the advancements the server sends on join.
+fn is_join_message(line: &str) -> bool {
+    (line.contains("[CHAT]") && line.contains("joined the game"))
+        || (line.contains("Render thread")
+            && line.contains("Loaded ")
+            && line.contains(" advancements"))
+}
+
+fn forward_stdin(mut child_stdin: std::process::ChildStdin) {
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let stdin = std::io::stdin();
+        while stdin.read_line(&mut line).is_ok_and(|read| read > 0) {
+            if child_stdin.write_all(line.as_bytes()).is_err() || child_stdin.flush().is_err() {
+                break;
+            }
+            line.clear();
+        }
+    });
 }
 
 fn clone_buffer(buffer: &Arc<Mutex<Vec<u8>>>) -> Result<Vec<u8>, String> {
@@ -359,10 +399,42 @@ mod tests {
             .arg("-c")
             .arg("printf '[Render thread/INFO]: Stopping!\\n'; sleep 30");
 
-        let output = run_client_process_with_timeout(&mut command, Some(Duration::from_secs(5)))
-            .expect("client shutdown should remain supervised");
+        let output =
+            run_client_process_with_timeout(&mut command, Some(Duration::from_secs(5)), false)
+                .expect("client shutdown should remain supervised");
 
         assert!(!output.timed_out);
         assert!(output.graceful_stop);
+    }
+
+    #[test]
+    fn joining_client_finishes_once_its_player_joins() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            "printf '[12:00:00] [Render thread/INFO]: [System] [CHAT] Player joined the game\\n'; sleep 30",
+        );
+
+        let output =
+            run_client_process_with_timeout(&mut command, Some(Duration::from_secs(5)), true)
+                .expect("joining client should remain supervised");
+
+        assert!(!output.timed_out);
+        assert!(output.graceful_stop);
+    }
+
+    #[test]
+    fn join_messages_come_from_chat_or_received_advancements() {
+        assert!(is_join_message(
+            "[Render thread/INFO]: [System] [CHAT] Player joined the game"
+        ));
+        assert!(is_join_message(
+            "[Render thread/INFO] [minecraft/ChatComponent]: [CHAT] Player joined the game"
+        ));
+        assert!(is_join_message(
+            "[Render thread/INFO] [minecraft/AdvancementList]: Loaded 0 advancements"
+        ));
+        assert!(!is_join_message(
+            "[Server thread/INFO]: Player joined the game"
+        ));
     }
 }

@@ -143,6 +143,25 @@ pub(super) fn apply_server_properties(instance: &Instance, game_dir: &Path) -> R
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
+/// Turns off the accessibility onboarding screen a fresh client shows on first launch. Nobody
+/// dismisses it in an unattended run, and it holds back `--join`.
+pub(super) fn skip_client_onboarding(game_dir: &Path) -> Result<(), String> {
+    let path = game_dir.join("options.txt");
+    let existing = if path.is_file() {
+        fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+    } else {
+        String::new()
+    };
+    let mut lines = existing
+        .lines()
+        .filter(|line| !line.starts_with("onboardAccessibility:"))
+        .collect::<Vec<_>>();
+    lines.push("onboardAccessibility:false");
+    fs::write(&path, lines.join("\n") + "\n")
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
 pub(super) fn write_side_launcher_metadata(
     instance: &Instance,
     side: &str,
@@ -223,4 +242,28 @@ pub(super) fn copy_fixture_tree(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_onboarding_is_turned_off_and_other_options_kept() {
+        let game = env::temp_dir().join(format!("modstage-onboarding-{}", std::process::id()));
+        fs::create_dir_all(&game).unwrap();
+        fs::write(
+            game.join("options.txt"),
+            "onboardAccessibility:true\nlang:en_us\n",
+        )
+        .unwrap();
+
+        skip_client_onboarding(&game).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(game.join("options.txt")).unwrap(),
+            "lang:en_us\nonboardAccessibility:false\n"
+        );
+        fs::remove_dir_all(game).unwrap();
+    }
 }

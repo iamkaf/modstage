@@ -62,10 +62,6 @@ impl<'a> InstallerRuntime<'a> {
             minecraft_artifact,
         )
     }
-
-    pub(super) fn neoforge_client_runtime(&self) -> Result<Option<PathBuf>, String> {
-        neoforge_client_runtime(self.config, self.instance, self.lock_path, self.dirs)
-    }
 }
 
 pub(super) fn prepare_forge_client_artifact(
@@ -211,47 +207,6 @@ pub(super) fn prepare_forge_client_artifact(
     Ok(Some(patched))
 }
 
-pub(super) fn neoforge_client_runtime(
-    config: &Config,
-    instance: &Instance,
-    lock_path: &Path,
-    dirs: &StateDirs,
-) -> Result<Option<PathBuf>, String> {
-    if instance.loader != "neoforge" {
-        return Ok(None);
-    }
-    let Some(version) = neoforge_runtime_version(lock_path, instance)? else {
-        return Ok(None);
-    };
-    let coordinate = format!("net.neoforged:neoforge:{version}:universal");
-    let coordinates = MavenCoordinates::parse_coordinate(&coordinate)
-        .ok_or_else(|| format!("invalid NeoForge runtime coordinate `{coordinate}`"))?;
-    let repositories = repositories_with_builtins(&config.repositories);
-    resolve_maven_artifact(
-        &repositories,
-        &coordinates,
-        &dirs.cache.join("downloads").join("maven"),
-    )?
-    .map(|artifact| Some(artifact.path))
-    .ok_or_else(|| format!("failed to resolve NeoForge runtime `{coordinate}`"))
-}
-
-fn neoforge_runtime_version(
-    lock_path: &Path,
-    instance: &Instance,
-) -> Result<Option<String>, String> {
-    Ok(
-        locked_table_value(lock_path, &instance.name, "loader", "version")?
-            .filter(|version| version != "latest")
-            .or_else(|| {
-                instance
-                    .loader_version
-                    .clone()
-                    .filter(|version| version != "latest")
-            }),
-    )
-}
-
 pub(super) fn prepare_forge_server_launch(
     config: &Config,
     instance: &Instance,
@@ -270,13 +225,12 @@ pub(super) fn prepare_forge_server_launch(
     };
     let coordinates = MavenCoordinates::parse_coordinate(&installer_maven)
         .ok_or_else(|| format!("invalid Forge installer coordinate `{installer_maven}`"))?;
-    let loader_args = installer_server_args_file(&instance.loader, coordinates.version);
-    let loader_args_path = game_dir.join(loader_args.trim_start_matches('@'));
-    if loader_args_path.is_file() {
-        return Ok(Some(ForgeServerLaunch {
-            artifact: loader_args_path,
-            args: forge_server_launch_args(game_dir, loader_args),
-        }));
+    let marker = game_dir.join(".modstage-installed");
+    if fs::read_to_string(&marker).is_ok_and(|installed| installed.trim() == installer_maven)
+        && let Some(launch) =
+            installed_server_launch(&instance.loader, game_dir, coordinates.version)
+    {
+        return Ok(Some(launch));
     }
 
     let repositories = repositories_with_builtins(&config.repositories);
@@ -287,6 +241,14 @@ pub(super) fn prepare_forge_server_launch(
     )?
     .ok_or_else(|| format!("failed to resolve Forge installer `{installer_maven}`"))?;
 
+    // Install from scratch: an install that didn't finish can leave truncated downloads, which
+    // the installer would reuse.
+    let _ = fs::remove_file(&marker);
+    let libraries = game_dir.join("libraries");
+    if libraries.exists() {
+        fs::remove_dir_all(&libraries)
+            .map_err(|error| format!("failed to clear {}: {error}", libraries.display()))?;
+    }
     let mut installer_command = Command::new(java);
     installer_command
         .arg("-jar")
@@ -309,18 +271,40 @@ pub(super) fn prepare_forge_server_launch(
                 .unwrap_or_else(|| "unknown".to_string())
         ));
     }
+    let launch = installed_server_launch(&instance.loader, game_dir, coordinates.version)
+        .ok_or_else(|| {
+            format!(
+                "Forge installer created neither {} nor a server shim jar",
+                installer_server_args_file(&instance.loader, coordinates.version)
+                    .trim_start_matches('@')
+            )
+        })?;
+    fs::write(&marker, &installer_maven)
+        .map_err(|error| format!("failed to write {}: {error}", marker.display()))?;
 
-    if !loader_args_path.is_file() {
-        return Err(format!(
-            "Forge installer did not create {}",
-            loader_args_path.display()
-        ));
+    Ok(Some(launch))
+}
+
+/// How an installed server starts: from the arguments file the installer writes, or, for Forge
+/// 1.20.3, whose installer writes none, from the shim jar.
+fn installed_server_launch(
+    loader: &str,
+    game_dir: &Path,
+    version: &str,
+) -> Option<ForgeServerLaunch> {
+    let loader_args = installer_server_args_file(loader, version);
+    let loader_args_path = game_dir.join(loader_args.trim_start_matches('@'));
+    if loader_args_path.is_file() {
+        return Some(ForgeServerLaunch {
+            artifact: loader_args_path,
+            args: forge_server_launch_args(game_dir, loader_args),
+        });
     }
-
-    Ok(Some(ForgeServerLaunch {
-        artifact: installer.path,
-        args: forge_server_launch_args(game_dir, loader_args),
-    }))
+    let shim = format!("forge-{version}-shim.jar");
+    game_dir.join(&shim).is_file().then(|| ForgeServerLaunch {
+        artifact: game_dir.join(&shim),
+        args: vec!["-jar".to_string(), shim, "nogui".to_string()],
+    })
 }
 
 /// One installer processor to run for the client, with its arguments already substituted.
@@ -674,49 +658,5 @@ mod tests {
         let error =
             client_processor_plan(profile, &data).expect_err("an unknown placeholder must fail");
         assert!(error.contains("{MOJMAPS}"), "{error}");
-    }
-
-    #[test]
-    fn neoforge_client_runtime_uses_locked_version_before_configured_latest() {
-        let root = env::temp_dir().join(format!(
-            "modstage-neoforge-runtime-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("failed to create temp root");
-        let lock_path = root.join("modstage.lock");
-        fs::write(
-            &lock_path,
-            r#"[[instance]]
-instance = "neoforge-client"
-loader = "neoforge"
-
-[minecraft]
-version = "26.1.2"
-
-[loader]
-version = "26.1.2.66-beta"
-"#,
-        )
-        .expect("failed to write lockfile");
-        let instance = Instance {
-            name: "neoforge-client".to_string(),
-            minecraft: "26.1.2".to_string(),
-            loader: "neoforge".to_string(),
-            loader_version: Some("latest".to_string()),
-            sides: vec!["client".to_string()],
-            modrinth_pack: None,
-            server_properties: Vec::new(),
-            mods: Vec::new(),
-            fixtures: Vec::new(),
-        };
-
-        assert_eq!(
-            neoforge_runtime_version(&lock_path, &instance)
-                .expect("runtime version should resolve")
-                .as_deref(),
-            Some("26.1.2.66-beta")
-        );
-
-        fs::remove_dir_all(root).expect("failed to remove temp root");
     }
 }

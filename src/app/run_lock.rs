@@ -464,15 +464,6 @@ pub(super) fn locked_value(
     Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.value(key)))
 }
 
-pub(super) fn locked_table_value(
-    lock_path: &Path,
-    instance: &str,
-    table: &str,
-    key: &str,
-) -> Result<Option<String>, String> {
-    Ok(LockedInstance::read(lock_path, instance)?.and_then(|lock| lock.table_value(table, key)))
-}
-
 fn instance_block<'a>(lock: &'a str, instance: &str) -> Option<&'a str> {
     lock.split("[[instance]]")
         .skip(1)
@@ -526,16 +517,30 @@ pub(super) fn locked_arguments(
         .unwrap_or_default())
 }
 
-pub(super) fn fetch_locked_libraries(
+/// Locked libraries for one side, restored on disk.
+pub(super) struct RestoredLibraries {
+    pub(super) classpath: Vec<PathBuf>,
+    /// Jars of native libraries to extract before a client launch.
+    pub(super) natives: Vec<PathBuf>,
+}
+
+/// Restores the side's locked libraries. Libraries locked by Maven path live under
+/// `libraries_dir` in Maven layout, because loader arguments name them there.
+pub(super) fn restore_locked_libraries(
     lock_path: &Path,
     instance: &str,
-    cache_dir: &Path,
+    libraries_dir: &Path,
     side: &str,
-) -> Result<Vec<PathBuf>, String> {
-    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
-        return Ok(Vec::new());
+) -> Result<RestoredLibraries, String> {
+    let mut restored = RestoredLibraries {
+        classpath: Vec::new(),
+        natives: Vec::new(),
     };
-    let mut libraries = Vec::new();
+    let Some(lock) = LockedInstance::read(lock_path, instance)? else {
+        return Ok(restored);
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut classpath = Vec::new();
     for block in lock.array_tables("library").into_iter().flatten() {
         if let Some(library_side) = table_string(block.get("side"))
             && library_side != "common"
@@ -543,23 +548,62 @@ pub(super) fn fetch_locked_libraries(
         {
             continue;
         }
-        let file_name = table_string(block.get("path"))
-            .and_then(|path| path.rsplit('/').next().map(str::to_string))
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "library.jar".to_string());
-        let name = table_string(block.get("name")).unwrap_or_else(|| file_name.clone());
-        if let Some(url) = table_string(block.get("url")) {
-            let path = fetch_to_cache(&url, cache_dir, &file_name)?;
-            verify_locked_library_hash(block, &name, &path)?;
-            libraries.push(path);
-        } else if let Some(path) = table_string(block.get("path")) {
-            let path = PathBuf::from(path);
-            verify_locked_library_hash(block, &name, &path)?;
-            libraries.push(path);
+        let Some(locked_path) = table_string(block.get("path")) else {
+            continue;
+        };
+        let name = table_string(block.get("name")).unwrap_or_else(|| locked_path.clone());
+        let is_maven_path = Path::new(&locked_path).is_relative();
+        let path = if is_maven_path {
+            libraries_dir.join(&locked_path)
+        } else {
+            PathBuf::from(&locked_path)
+        };
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let current = table_string(block.get("sha256")).is_some_and(|expected| {
+            fs::read(&path).is_ok_and(|bytes| sha256_hex(&bytes) == expected)
+        });
+        if !current && let Some(url) = table_string(block.get("url")) {
+            if is_maven_path {
+                fetch_library(&url, &locked_path, None, libraries_dir)?;
+            } else {
+                let file_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("library.jar");
+                fetch_to_cache(&url, path.parent().unwrap_or(libraries_dir), file_name)?;
+            }
+        }
+        verify_locked_library_hash(block, &name, &path)?;
+        match table_string(block.get("use")).as_deref() {
+            Some("natives") => restored.natives.push(path),
+            Some("library_directory") => {}
+            _ => classpath.push((library_key(&name), path)),
+        }
+    }
+    // Like the vanilla launcher merging a loader profile over the version it inherits, a later
+    // library replaces an earlier one with the same group and artifact: Fabric's ASM wins over
+    // the older one Minecraft lists.
+    for (index, (key, path)) in classpath.iter().enumerate() {
+        if !classpath[index + 1..].iter().any(|(later, _)| later == key) {
+            restored.classpath.push(path.clone());
         }
     }
 
-    Ok(libraries)
+    Ok(restored)
+}
+
+/// A library's Maven coordinate without its version, so versions of one library compare equal.
+fn library_key(name: &str) -> String {
+    let name = name.split('@').next().unwrap_or(name);
+    let mut parts = name.split(':');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(group), Some(artifact), Some(_version), classifier) => {
+            format!("{group}:{artifact}:{}", classifier.unwrap_or_default())
+        }
+        _ => name.to_string(),
+    }
 }
 
 pub(super) fn verify_locked_library_hash(
@@ -674,6 +718,18 @@ mod tests {
             instances: Vec::new(),
         };
         (config, instance)
+    }
+
+    #[test]
+    fn library_keys_ignore_the_version_but_not_the_classifier() {
+        assert_eq!(
+            library_key("org.ow2.asm:asm:9.3"),
+            library_key("org.ow2.asm:asm:9.10.1")
+        );
+        assert_ne!(
+            library_key("org.lwjgl:lwjgl:3.3.3"),
+            library_key("org.lwjgl:lwjgl:3.3.3:natives-linux")
+        );
     }
 
     #[test]
